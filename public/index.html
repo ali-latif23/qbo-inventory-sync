@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>QBO Inventory Sync</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+  <style>
+    :root {
+      --bg: #0a0c10;
+      --surface: #111318;
+      --surface2: #181c23;
+      --border: #1e2330;
+      --accent: #2dd4bf;
+      --accent2: #818cf8;
+      --green: #34d399;
+      --red: #f87171;
+      --yellow: #fbbf24;
+      --blue: #60a5fa;
+      --text: #e2e8f0;
+      --muted: #64748b;
+      --mono: 'IBM Plex Mono', monospace;
+      --sans: 'IBM Plex Sans', sans-serif;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      min-height: 100vh;
+    }
+
+    /* Grid noise texture */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(45,212,191,0.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(45,212,191,0.015) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
+
+    /* Header */
+    header {
+      border-bottom: 1px solid var(--border);
+      padding: 20px 0;
+      margin-bottom: 40px;
+    }
+
+    .header-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-mark {
+      width: 36px; height: 36px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--mono);
+      font-weight: 600;
+      font-size: 14px;
+      color: #000;
+    }
+
+    .logo-text {
+      font-size: 16px;
+      font-weight: 500;
+      letter-spacing: -0.3px;
+    }
+
+    .logo-sub {
+      font-size: 12px;
+      color: var(--muted);
+      font-family: var(--mono);
+    }
+
+    .live-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-family: var(--mono);
+      color: var(--green);
+      background: rgba(52,211,153,0.08);
+      border: 1px solid rgba(52,211,153,0.2);
+      padding: 4px 10px;
+      border-radius: 4px;
+    }
+
+    .live-dot {
+      width: 6px; height: 6px;
+      background: var(--green);
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    /* Stats row */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px 24px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+    }
+    .stat-card.green::before { background: var(--green); }
+    .stat-card.red::before { background: var(--red); }
+    .stat-card.blue::before { background: var(--blue); }
+
+    .stat-label {
+      font-size: 11px;
+      font-family: var(--mono);
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+
+    .stat-value {
+      font-size: 32px;
+      font-family: var(--mono);
+      font-weight: 600;
+      line-height: 1;
+    }
+
+    .stat-card.green .stat-value { color: var(--green); }
+    .stat-card.red .stat-value { color: var(--red); }
+    .stat-card.blue .stat-value { color: var(--blue); }
+
+    .stat-sub {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 6px;
+      font-family: var(--mono);
+    }
+
+    /* Section */
+    .section { margin-bottom: 32px; }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .section-title {
+      font-size: 12px;
+      font-family: var(--mono);
+      font-weight: 500;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    /* Companies */
+    .companies-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+
+    .company-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      transition: border-color 0.2s;
+    }
+
+    .company-card.connected {
+      border-color: rgba(52,211,153,0.25);
+    }
+
+    .company-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .company-name {
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .company-role {
+      font-size: 10px;
+      font-family: var(--mono);
+      color: var(--accent);
+      background: rgba(45,212,191,0.08);
+      border: 1px solid rgba(45,212,191,0.2);
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
+
+    .status-chip {
+      font-size: 10px;
+      font-family: var(--mono);
+      padding: 3px 8px;
+      border-radius: 3px;
+      font-weight: 500;
+    }
+
+    .status-chip.connected {
+      color: var(--green);
+      background: rgba(52,211,153,0.1);
+      border: 1px solid rgba(52,211,153,0.2);
+    }
+
+    .status-chip.disconnected {
+      color: var(--muted);
+      background: rgba(100,116,139,0.1);
+      border: 1px solid rgba(100,116,139,0.2);
+    }
+
+    .company-detail {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: var(--mono);
+      margin-bottom: 14px;
+      min-height: 30px;
+    }
+
+    .btn {
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 500;
+      padding: 7px 14px;
+      border-radius: 5px;
+      border: none;
+      cursor: pointer;
+      transition: all 0.15s;
+      text-decoration: none;
+      display: inline-block;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #000;
+    }
+
+    .btn-primary:hover { background: #14b8a6; }
+
+    .btn-danger {
+      background: rgba(248,113,113,0.1);
+      color: var(--red);
+      border: 1px solid rgba(248,113,113,0.2);
+    }
+
+    .btn-danger:hover { background: rgba(248,113,113,0.2); }
+
+    .btn-ghost {
+      background: var(--surface2);
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+
+    .btn-ghost:hover { color: var(--text); border-color: var(--muted); }
+
+    /* Webhook info */
+    .webhook-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .webhook-label {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: var(--mono);
+      white-space: nowrap;
+    }
+
+    .webhook-url {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--accent2);
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      padding: 8px 14px;
+      border-radius: 5px;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+
+    .webhook-url:hover { border-color: var(--accent2); }
+
+    /* Test sync */
+    .test-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px 24px;
+    }
+
+    .test-row {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      flex: 1;
+    }
+
+    .field label {
+      font-size: 10px;
+      font-family: var(--mono);
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .field select, .field input {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 12px;
+      padding: 8px 12px;
+      border-radius: 5px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .field select:focus, .field input:focus {
+      border-color: var(--accent);
+    }
+
+    /* Logs */
+    .logs-container {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .logs-header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logs-title {
+      font-size: 11px;
+      font-family: var(--mono);
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .log-list { max-height: 400px; overflow-y: auto; }
+
+    .log-list::-webkit-scrollbar { width: 4px; }
+    .log-list::-webkit-scrollbar-track { background: transparent; }
+    .log-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .log-entry {
+      display: grid;
+      grid-template-columns: 20px 140px 1fr;
+      gap: 12px;
+      align-items: start;
+      padding: 10px 20px;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 11px;
+      transition: background 0.1s;
+    }
+
+    .log-entry:last-child { border-bottom: none; }
+    .log-entry:hover { background: var(--surface2); }
+
+    .log-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      margin-top: 3px;
+      flex-shrink: 0;
+    }
+
+    .log-dot.success { background: var(--green); }
+    .log-dot.error { background: var(--red); }
+    .log-dot.warning { background: var(--yellow); }
+    .log-dot.info { background: var(--blue); }
+
+    .log-time { color: var(--muted); }
+    .log-message { color: var(--text); line-height: 1.5; }
+
+    .log-empty {
+      padding: 40px;
+      text-align: center;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 18px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text);
+      z-index: 100;
+      transform: translateY(80px);
+      opacity: 0;
+      transition: all 0.25s ease;
+    }
+
+    .toast.show { transform: translateY(0); opacity: 1; }
+    .toast.success { border-color: rgba(52,211,153,0.3); color: var(--green); }
+    .toast.error { border-color: rgba(248,113,113,0.3); color: var(--red); }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .stats-row, .companies-grid { grid-template-columns: 1fr; }
+      .test-row { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <div class="header-inner">
+      <div class="logo">
+        <div class="logo-mark">QS</div>
+        <div>
+          <div class="logo-text">QBO Inventory Sync</div>
+          <div class="logo-sub">Multi-company inventory management</div>
+        </div>
+      </div>
+      <div class="live-badge">
+        <div class="live-dot"></div>
+        LIVE
+      </div>
+    </div>
+  </header>
+
+  <!-- Stats -->
+  <div class="stats-row">
+    <div class="stat-card green">
+      <div class="stat-label">Successful Syncs</div>
+      <div class="stat-value" id="stat-synced">—</div>
+      <div class="stat-sub">total inventory updates</div>
+    </div>
+    <div class="stat-card red">
+      <div class="stat-label">Errors</div>
+      <div class="stat-value" id="stat-errors">—</div>
+      <div class="stat-sub">sync failures</div>
+    </div>
+    <div class="stat-card blue">
+      <div class="stat-label">Last Sync</div>
+      <div class="stat-value" id="stat-last" style="font-size:16px; padding-top:8px;">—</div>
+      <div class="stat-sub">most recent activity</div>
+    </div>
+  </div>
+
+  <!-- Companies -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">QuickBooks Companies</div>
+    </div>
+    <div class="companies-grid" id="companies-grid">
+      <!-- populated by JS -->
+    </div>
+  </div>
+
+  <!-- Webhook -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">Webhook Endpoint</div>
+    </div>
+    <div class="webhook-box">
+      <div class="webhook-label">Register this URL in Intuit Developer Console →</div>
+      <div class="webhook-url" id="webhook-url" onclick="copyWebhook()" title="Click to copy">loading...</div>
+      <button class="btn btn-ghost" onclick="copyWebhook()">Copy</button>
+    </div>
+  </div>
+
+  <!-- Test Sync -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-title">Manual Test Sync</div>
+    </div>
+    <div class="test-panel">
+      <div class="test-row">
+        <div class="field">
+          <label>Type</label>
+          <select id="test-type" onchange="onTypeChange()">
+            <option value="invoice">Invoice (any company)</option>
+            <option value="po">Purchase Order (Company 1 only)</option>
+          </select>
+        </div>
+        <div class="field" id="company-field">
+          <label>Source Company</label>
+          <select id="test-company">
+            <option value="company1">Company 1 (Master)</option>
+            <option value="company2">Company 2</option>
+            <option value="company3">Company 3</option>
+          </select>
+        </div>
+        <div class="field">
+          <label id="id-label">Invoice ID</label>
+          <input type="text" id="test-id" placeholder="e.g. 123" />
+        </div>
+        <button class="btn btn-primary" onclick="testSync()">Run Sync</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Logs -->
+  <div class="section">
+    <div class="logs-container">
+      <div class="logs-header">
+        <div class="logs-title">Sync Activity Log</div>
+        <button class="btn btn-ghost" onclick="loadData()">Refresh</button>
+      </div>
+      <div class="log-list" id="log-list">
+        <div class="log-empty">No activity yet. Connect your companies to start syncing.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+  let webhookUrl = '';
+
+  async function loadData() {
+    try {
+      const [statusRes, logsRes] = await Promise.all([
+        fetch('/api/status'),
+        fetch('/api/logs?limit=100')
+      ]);
+      const status = await statusRes.json();
+      const logs = await logsRes.json();
+      renderStatus(status);
+      renderLogs(logs);
+    } catch (e) {
+      console.error('Failed to load data', e);
+    }
+  }
+
+  function renderStatus(status) {
+    // Stats
+    document.getElementById('stat-synced').textContent = status.stats?.totalSynced ?? 0;
+    document.getElementById('stat-errors').textContent = status.stats?.errors ?? 0;
+    const last = status.stats?.lastSync;
+    document.getElementById('stat-last').textContent = last
+      ? new Date(last).toLocaleTimeString()
+      : 'Never';
+
+    // Webhook
+    webhookUrl = status.webhookUrl || '';
+    document.getElementById('webhook-url').textContent = webhookUrl;
+
+    // Companies
+    const grid = document.getElementById('companies-grid');
+    grid.innerHTML = '';
+    ['company1', 'company2', 'company3'].forEach(key => {
+      const c = status.companies?.[key] || {};
+      const connected = c.connected;
+      const card = document.createElement('div');
+      card.className = `company-card${connected ? ' connected' : ''}`;
+      card.innerHTML = `
+        <div class="company-header">
+          <div>
+            <div class="company-name">${c.name || key}</div>
+            ${c.isMaster ? '<div class="company-role" style="margin-top:4px">MASTER INVENTORY</div>' : ''}
+          </div>
+          <div class="status-chip ${connected ? 'connected' : 'disconnected'}">
+            ${connected ? '● CONNECTED' : '○ NOT CONNECTED'}
+          </div>
+        </div>
+        <div class="company-detail">
+          ${connected
+            ? `realmId: ${c.realmId}<br>Since: ${new Date(c.connectedAt).toLocaleDateString()}`
+            : 'Click Connect to link this QuickBooks company'}
+        </div>
+        ${connected
+          ? `<button class="btn btn-danger" onclick="disconnect('${key}')">Disconnect</button>`
+          : `<a class="btn btn-primary" href="/connect/${key}">Connect Company</a>`
+        }
+      `;
+      grid.appendChild(card);
+    });
+  }
+
+  function renderLogs(logs) {
+    const list = document.getElementById('log-list');
+    if (!logs.length) {
+      list.innerHTML = '<div class="log-empty">No activity yet. Connect your companies to start syncing.</div>';
+      return;
+    }
+
+    list.innerHTML = logs.map(entry => `
+      <div class="log-entry">
+        <div class="log-dot ${entry.type}"></div>
+        <div class="log-time">${new Date(entry.timestamp).toLocaleTimeString()}</div>
+        <div class="log-message">${entry.message}</div>
+      </div>
+    `).join('');
+  }
+
+  function copyWebhook() {
+    if (!webhookUrl) return;
+    navigator.clipboard.writeText(webhookUrl).then(() => showToast('Webhook URL copied!', 'success'));
+  }
+
+  async function disconnect(companyKey) {
+    if (!confirm('Disconnect this company?')) return;
+    await fetch(`/api/disconnect/${companyKey}`, { method: 'POST' });
+    showToast('Company disconnected', 'success');
+    loadData();
+  }
+
+  function onTypeChange() {
+    const type = document.getElementById('test-type').value;
+    const companyField = document.getElementById('company-field');
+    const idLabel = document.getElementById('id-label');
+    if (type === 'po') {
+      companyField.style.display = 'none';
+      idLabel.textContent = 'Purchase Order ID';
+      document.getElementById('test-id').placeholder = 'e.g. 456';
+    } else {
+      companyField.style.display = '';
+      idLabel.textContent = 'Invoice ID';
+      document.getElementById('test-id').placeholder = 'e.g. 123';
+    }
+  }
+
+  async function testSync() {
+    const type = document.getElementById('test-type').value;
+    const companyKey = document.getElementById('test-company').value;
+    const id = document.getElementById('test-id').value.trim();
+    if (!id) { showToast('Enter an ID', 'error'); return; }
+
+    showToast('Running sync...', '');
+    try {
+      const body = type === 'po'
+        ? { companyKey: 'company1', poId: id, type: 'po' }
+        : { companyKey, invoiceId: id };
+
+      const res = await fetch('/api/test-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (data.error) {
+        showToast('Error: ' + data.error, 'error');
+      } else {
+        const count = data.results?.length || 0;
+        const action = type === 'po' ? 'restocked' : 'deducted';
+        showToast(`${count} item(s) ${action} successfully`, 'success');
+        loadData();
+      }
+    } catch (e) {
+      showToast('Request failed', 'error');
+    }
+  }
+
+  function showToast(msg, type) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = `toast show${type ? ' ' + type : ''}`;
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => { t.className = 'toast'; }, 3000);
+  }
+
+  // Check URL params for feedback
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('connected')) showToast(`${params.get('connected')} connected!`, 'success');
+  if (params.get('error')) showToast('Error: ' + params.get('error'), 'error');
+  if (params.get('connected') || params.get('error')) {
+    window.history.replaceState({}, '', '/');
+  }
+
+  // Load and auto-refresh every 15s
+  loadData();
+  setInterval(loadData, 15000);
+</script>
+</body>
+</html>
