@@ -521,6 +521,25 @@ app.post('/api/test-sync', async (req, res) => {
   }
 });
 
+app.get('/api/diagnose/:companyKey', async (req, res) => {
+  const { companyKey } = req.params;
+  try {
+    // List recent invoices
+    const encoded = encodeURIComponent('SELECT * FROM Invoice ORDERBY MetaData.CreateTime DESC MAXRESULTS 5');
+    const data = await qboGet(companyKey, `query?query=${encoded}`);
+    const invoices = data.QueryResponse?.Invoice || [];
+    res.json({
+      companyKey,
+      realmId: appData.companies[companyKey]?.realmId,
+      invoiceCount: invoices.length,
+      invoices: invoices.map(i => ({ id: i.Id, docNumber: i.DocNumber, total: i.TotalAmt, date: i.TxnDate })),
+      rawFault: data.Fault || null
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/disconnect/:companyKey', (req, res) => {
   const { companyKey } = req.params;
   if (appData.companies[companyKey]) {
