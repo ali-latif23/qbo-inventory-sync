@@ -148,7 +148,21 @@ async function qboPost(companyKey, endpoint, body) {
 
 async function getInvoice(companyKey, invoiceId) {
   const data = await qboGet(companyKey, `invoice/${invoiceId}`);
+  if (!data.Invoice && data.Fault) {
+    log('error', `QBO API fault fetching invoice ${invoiceId}`, { fault: JSON.stringify(data.Fault) });
+  }
   return data.Invoice;
+}
+
+async function getInvoiceWithRetry(companyKey, invoiceId, retries = 3, delayMs = 2000) {
+  for (let i = 0; i < retries; i++) {
+    const invoice = await getInvoice(companyKey, invoiceId);
+    if (invoice) return invoice;
+    if (i < retries - 1) {
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+  return null;
 }
 
 async function getItem(companyKey, itemId) {
@@ -269,8 +283,8 @@ async function processInvoiceSync(sourceCompanyKey, invoiceId) {
 
   log('info', `Processing invoice ${invoiceId} from ${sourceCompany.name}`, { sourceCompanyKey, invoiceId });
 
-  const invoice = await getInvoice(sourceCompanyKey, invoiceId);
-  if (!invoice) throw new Error(`Invoice ${invoiceId} not found`);
+  const invoice = await getInvoiceWithRetry(sourceCompanyKey, invoiceId);
+  if (!invoice) throw new Error(`Invoice ${invoiceId} not found - may not be accessible via API yet`);
   if (invoice.status === 'Void' || invoice.PrivateNote?.includes('__synced__')) return;
 
   const lineItems = invoice.Line?.filter(l => l.DetailType === 'SalesItemLineDetail') || [];
