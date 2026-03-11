@@ -147,11 +147,21 @@ async function qboPost(companyKey, endpoint, body) {
 }
 
 async function getInvoice(companyKey, invoiceId) {
+  // Try direct ID lookup first
   const data = await qboGet(companyKey, `invoice/${invoiceId}`);
-  if (!data.Invoice && data.Fault) {
+  if (data.Invoice) return data.Invoice;
+
+  // If not found, try querying by DocNumber (display number)
+  const encoded = encodeURIComponent(`SELECT * FROM Invoice WHERE DocNumber = '${invoiceId}'`);
+  const queryData = await qboGet(companyKey, `query?query=${encoded}`);
+  if (queryData.QueryResponse?.Invoice?.length > 0) {
+    return queryData.QueryResponse.Invoice[0];
+  }
+
+  if (data.Fault) {
     log('error', `QBO API fault fetching invoice ${invoiceId}`, { fault: JSON.stringify(data.Fault) });
   }
-  return data.Invoice;
+  return null;
 }
 
 async function getInvoiceWithRetry(companyKey, invoiceId, retries = 3, delayMs = 2000) {
