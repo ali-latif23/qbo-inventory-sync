@@ -41,9 +41,9 @@ const CONFIG = {
   port: process.env.PORT || 3000,
   // Company 1 is the MASTER inventory company
   companies: {
-    company1: { name: 'Company 1 (Master Inventory)', realmId: null, tokens: null },
-    company2: { name: 'Company 2', realmId: null, tokens: null },
-    company3: { name: 'Company 3', realmId: null, tokens: null },
+    company1: { name: 'ProClean', realmId: null, tokens: null },
+    company2: { name: 'The Linen Pros', realmId: null, tokens: null },
+    company3: { name: 'Brown Eyed Girl', realmId: null, tokens: null },
   }
 };
 
