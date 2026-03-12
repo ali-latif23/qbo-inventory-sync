@@ -571,6 +571,32 @@ app.post('/api/test-sync', async (req, res) => {
   }
 });
 
+app.get('/eula', (req, res) => {
+  res.send(`<!DOCTYPE html><html><head><title>EULA - Inventory Sync</title>
+  <style>body{font-family:sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.6;color:#333}</style></head>
+  <body><h1>End-User License Agreement</h1><p><strong>Last updated: March 2026</strong></p>
+  <p>This End-User License Agreement ("Agreement") is between your company ("User") and the operator of this Inventory Sync application ("App").</p>
+  <h2>1. License</h2><p>This App is licensed for internal business use only. You may not redistribute, resell, or sublicense the App.</p>
+  <h2>2. Use of QuickBooks Data</h2><p>This App connects to QuickBooks Online via the Intuit API solely to read invoice and purchase order data and update inventory quantities across your connected companies.</p>
+  <h2>3. Data Storage</h2><p>OAuth tokens and sync logs are stored securely in a private database. No financial data is stored beyond what is necessary for inventory sync operations.</p>
+  <h2>4. Limitation of Liability</h2><p>This App is provided "as is". The operator is not liable for any inventory discrepancies, data loss, or business damages arising from use of this App.</p>
+  <h2>5. Termination</h2><p>You may disconnect your QuickBooks companies at any time via the App dashboard.</p>
+  <p>By using this App, you agree to these terms.</p></body></html>`);
+});
+
+app.get('/privacy', (req, res) => {
+  res.send(`<!DOCTYPE html><html><head><title>Privacy Policy - Inventory Sync</title>
+  <style>body{font-family:sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.6;color:#333}</style></head>
+  <body><h1>Privacy Policy</h1><p><strong>Last updated: March 2026</strong></p>
+  <p>This Privacy Policy describes how the Inventory Sync App handles your data.</p>
+  <h2>1. Data We Collect</h2><p>We collect and store OAuth access tokens required to connect to your QuickBooks Online companies. We also store sync activity logs including item names, quantities, and timestamps.</p>
+  <h2>2. How We Use Your Data</h2><p>Your data is used solely to sync inventory quantities across your connected QuickBooks companies. We do not sell, share, or use your data for any other purpose.</p>
+  <h2>3. Data Security</h2><p>All data is stored in a secure private database. OAuth tokens are encrypted in transit via HTTPS.</p>
+  <h2>4. Third Parties</h2><p>This App uses the Intuit QuickBooks API. Your use of QuickBooks is subject to Intuit's own privacy policy at intuit.com.</p>
+  <h2>5. Data Deletion</h2><p>You can remove all stored data by disconnecting your companies via the App dashboard. Contact your system administrator for full data deletion.</p>
+  <h2>6. Contact</h2><p>For privacy questions, contact your internal IT or system administrator.</p></body></html>`);
+});
+
 app.get('/api/diagnose/:companyKey', async (req, res) => {
   const { companyKey } = req.params;
   try {
