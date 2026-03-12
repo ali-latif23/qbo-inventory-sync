@@ -47,7 +47,7 @@ const CONFIG = {
   }
 };
 
-const QBO_BASE = 'https://sandbox-quickbooks.api.intuit.com/v3/company';
+const QBO_BASE = 'https://quickbooks.api.intuit.com/v3/company';
 const AUTH_BASE = 'https://appcenter.intuit.com/connect/oauth2';
 const TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
 const SCOPES = 'com.intuit.quickbooks.accounting';
