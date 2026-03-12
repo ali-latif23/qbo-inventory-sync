@@ -27,8 +27,30 @@ async function initDb() {
       details JSONB DEFAULT '{}',
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS processed_transactions (
+      id TEXT PRIMARY KEY,
+      company_key TEXT NOT NULL,
+      transaction_type TEXT NOT NULL,
+      processed_at TIMESTAMPTZ DEFAULT NOW()
+    );
   `);
   console.log('✅ Database initialized');
+}
+
+async function isAlreadyProcessed(companyKey, transactionType, transactionId) {
+  const key = `${companyKey}_${transactionType}_${transactionId}`;
+  try {
+    const res = await pool.query('SELECT id FROM processed_transactions WHERE id = $1', [key]);
+    return res.rows.length > 0;
+  } catch { return false; }
+}
+
+async function markAsProcessed(companyKey, transactionType, transactionId) {
+  const key = `${companyKey}_${transactionType}_${transactionId}`;
+  await pool.query(
+    'INSERT INTO processed_transactions (id, company_key, transaction_type) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+    [key, companyKey, transactionType]
+  );
 }
 
 
@@ -400,7 +422,70 @@ async function processInvoiceSync(sourceCompanyKey, invoiceId) {
   return results;
 }
 
-// ─── WEBHOOK ENDPOINT ─────────────────────────────────────────────────────────
+// ─── DAILY EMAIL SUMMARY ─────────────────────────────────────────────────────
+async function sendDailySummary() {
+  const emailTo = process.env.SUMMARY_EMAIL;
+  const gmailUser = process.env.GMAIL_USER;
+  const gmailPass = process.env.GMAIL_APP_PASSWORD;
+  if (!emailTo || !gmailUser || !gmailPass) return;
+
+  try {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const res = await pool.query(
+      `SELECT type, COUNT(*) as count FROM sync_logs WHERE timestamp > $1 GROUP BY type`,
+      [since]
+    );
+    const counts = {};
+    res.rows.forEach(r => counts[r.type] = parseInt(r.count));
+
+    const errorRes = await pool.query(
+      `SELECT message FROM sync_logs WHERE type = 'error' AND timestamp > $1 ORDER BY timestamp DESC LIMIT 10`,
+      [since]
+    );
+    const errors = errorRes.rows.map(r => r.message);
+
+    const subject = `QBO Inventory Sync — Daily Summary ${new Date().toLocaleDateString()}`;
+    const body = `
+Daily Inventory Sync Summary
+=============================
+Date: ${new Date().toLocaleDateString()}
+
+ACTIVITY (last 24 hours):
+- Successful syncs: ${counts.success || 0}
+- Errors: ${counts.error || 0}
+- Warnings: ${counts.warning || 0}
+- Info events: ${counts.info || 0}
+
+${errors.length > 0 ? `RECENT ERRORS:\n${errors.map(e => `- ${e}`).join('\n')}` : 'No errors in the last 24 hours ✅'}
+
+View full dashboard: ${process.env.APP_URL}
+    `.trim();
+
+    const nodemailer = require('nodemailer');
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: { user: gmailUser, pass: gmailPass }
+    });
+    await transporter.sendMail({ from: gmailUser, to: emailTo, subject, text: body });
+    console.log('📧 Daily summary email sent');
+  } catch (err) {
+    console.error('Failed to send daily summary:', err.message);
+  }
+}
+
+// Schedule daily summary at 8 AM UTC
+function scheduleDailySummary() {
+  const now = new Date();
+  const next8am = new Date();
+  next8am.setUTCHours(8, 0, 0, 0);
+  if (next8am <= now) next8am.setUTCDate(next8am.getUTCDate() + 1);
+  const msUntil8am = next8am - now;
+  setTimeout(() => {
+    sendDailySummary();
+    setInterval(sendDailySummary, 24 * 60 * 60 * 1000);
+  }, msUntil8am);
+  console.log(`📧 Daily summary scheduled in ${Math.round(msUntil8am / 60000)} minutes`);
+}
 app.post('/webhook', async (req, res) => {
   // Verify webhook signature
   const signature = req.headers['intuit-signature'];
@@ -439,12 +524,24 @@ app.post('/webhook', async (req, res) => {
 
         // Invoices from ANY company → deduct from master inventory
         if (entity.name === 'Invoice' && isCreateOrUpdate) {
+          const alreadyDone = await isAlreadyProcessed(companyKey, 'Invoice', entity.id);
+          if (alreadyDone) {
+            log('info', `Invoice ${entity.id} from ${companyKey} already processed, skipping`, {});
+            continue;
+          }
           await processInvoiceSync(companyKey, entity.id);
+          await markAsProcessed(companyKey, 'Invoice', entity.id);
         }
 
         // Purchase Orders from Company 1 ONLY → add to master inventory
         if (entity.name === 'PurchaseOrder' && isCreateOrUpdate && companyKey === 'company1') {
+          const alreadyDone = await isAlreadyProcessed(companyKey, 'PurchaseOrder', entity.id);
+          if (alreadyDone) {
+            log('info', `PO ${entity.id} already processed, skipping`, {});
+            continue;
+          }
           await processPurchaseOrderSync(entity.id);
+          await markAsProcessed(companyKey, 'PurchaseOrder', entity.id);
         }
       }
     }
@@ -528,12 +625,17 @@ app.get('/api/status', (req, res) => {
   const companies = {};
   ['company1', 'company2', 'company3'].forEach(key => {
     const c = appData.companies[key] || {};
+    const obtainedAt = c.tokens?.obtained_at || 0;
+    const refreshExpiresAt = obtainedAt + (100 * 24 * 60 * 60 * 1000); // 100 days
+    const daysUntilExpiry = Math.floor((refreshExpiresAt - Date.now()) / (1000 * 60 * 60 * 24));
     companies[key] = {
       name: c.name || CONFIG.companies[key]?.name || key,
       connected: !!c.tokens,
       realmId: c.realmId,
       connectedAt: c.connectedAt,
-      isMaster: key === 'company1'
+      isMaster: key === 'company1',
+      tokenExpiresInDays: c.tokens ? daysUntilExpiry : null,
+      tokenWarning: c.tokens && daysUntilExpiry <= 14 ? true : false
     };
   });
 
@@ -637,6 +739,7 @@ initDb()
       console.log(`\n🚀 QBO Inventory Sync running on port ${CONFIG.port}`);
       console.log(`   Dashboard: http://localhost:${CONFIG.port}`);
       console.log(`   Webhook:   http://localhost:${CONFIG.port}/webhook\n`);
+      scheduleDailySummary();
     });
   })
   .catch(err => {
