@@ -2,9 +2,35 @@ const express = require('express');
 const crypto = require('crypto');
 const fetch = (...args) => import('node-fetch').then(({ default: f }) => f(...args));
 const path = require('path');
-const fs = require('fs');
+const { Pool } = require('pg');
 
 const app = express();
+
+// ─── DATABASE SETUP ──────────────────────────────────────────────────────────
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL?.includes('railway.internal') ? false : { rejectUnauthorized: false }
+});
+
+async function initDb() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_state (
+      key TEXT PRIMARY KEY,
+      value JSONB NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS sync_logs (
+      id TEXT PRIMARY KEY,
+      timestamp TIMESTAMPTZ NOT NULL,
+      type TEXT NOT NULL,
+      message TEXT NOT NULL,
+      details JSONB DEFAULT '{}',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  console.log('✅ Database initialized');
+}
+
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const CONFIG = {
@@ -26,21 +52,44 @@ const AUTH_BASE = 'https://appcenter.intuit.com/connect/oauth2';
 const TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
 const SCOPES = 'com.intuit.quickbooks.accounting';
 
-// ─── PERSISTENT STORAGE (file-based, swap for DB in production) ─────────────
-const DATA_FILE = path.join(__dirname, 'data.json');
-
-function loadData() {
-  if (fs.existsSync(DATA_FILE)) {
-    return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+// ─── PERSISTENT STORAGE (PostgreSQL) ─────────────────────────────────────────
+async function loadData() {
+  const res = await pool.query(`SELECT key, value FROM app_state WHERE key IN ('companies', 'stats', 'pendingStates')`);
+  const data = { companies: {}, stats: { totalSynced: 0, errors: 0, lastSync: null }, pendingStates: {} };
+  for (const row of res.rows) {
+    data[row.key] = row.value;
   }
-  return { companies: {}, syncLogs: [], stats: { totalSynced: 0, errors: 0, lastSync: null } };
+  return data;
 }
 
-function saveData(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+async function saveField(key, value) {
+  await pool.query(`
+    INSERT INTO app_state (key, value, updated_at) VALUES ($1, $2, NOW())
+    ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
+  `, [key, JSON.stringify(value)]);
 }
 
-let appData = loadData();
+async function saveData(data) {
+  await Promise.all([
+    saveField('companies', data.companies),
+    saveField('stats', data.stats),
+    saveField('pendingStates', data.pendingStates || {})
+  ]);
+}
+
+async function addLog(entry) {
+  await pool.query(
+    `INSERT INTO sync_logs (id, timestamp, type, message, details) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
+    [entry.id, entry.timestamp, entry.type, entry.message, JSON.stringify(entry.details)]
+  );
+}
+
+async function getLogs(limit = 50) {
+  const res = await pool.query(`SELECT * FROM sync_logs ORDER BY timestamp DESC LIMIT $1`, [limit]);
+  return res.rows.map(r => ({ ...r, details: r.details }));
+}
+
+let appData = { companies: {}, stats: { totalSynced: 0, errors: 0, lastSync: null }, pendingStates: {} };
 
 // ─── MIDDLEWARE ─────────────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public')));
@@ -54,16 +103,16 @@ function log(type, message, details = {}) {
   const entry = {
     id: Date.now() + Math.random().toString(36).slice(2),
     timestamp: new Date().toISOString(),
-    type, // 'success' | 'error' | 'info' | 'warning'
+    type,
     message,
     details
   };
-  appData.syncLogs.unshift(entry);
-  if (appData.syncLogs.length > 200) appData.syncLogs = appData.syncLogs.slice(0, 200);
   if (type === 'success') appData.stats.totalSynced++;
   if (type === 'error') appData.stats.errors++;
   if (type === 'success' || type === 'error') appData.stats.lastSync = entry.timestamp;
-  saveData(appData);
+  // Fire and forget async saves
+  addLog(entry).catch(e => console.error('Log save error:', e));
+  saveField('stats', appData.stats).catch(e => console.error('Stats save error:', e));
   console.log(`[${type.toUpperCase()}] ${message}`, details);
   return entry;
 }
@@ -495,9 +544,10 @@ app.get('/api/status', (req, res) => {
   });
 });
 
-app.get('/api/logs', (req, res) => {
+app.get('/api/logs', async (req, res) => {
   const limit = parseInt(req.query.limit) || 50;
-  res.json(appData.syncLogs?.slice(0, limit) || []);
+  const logs = await getLogs(limit);
+  res.json(logs);
 });
 
 app.post('/api/test-sync', async (req, res) => {
@@ -553,8 +603,17 @@ app.post('/api/disconnect/:companyKey', (req, res) => {
 });
 
 // ─── START ────────────────────────────────────────────────────────────────────
-app.listen(CONFIG.port, () => {
-  console.log(`\n🚀 QBO Inventory Sync running on port ${CONFIG.port}`);
-  console.log(`   Dashboard: http://localhost:${CONFIG.port}`);
-  console.log(`   Webhook:   http://localhost:${CONFIG.port}/webhook\n`);
-});
+initDb()
+  .then(() => loadData())
+  .then(data => {
+    appData = data;
+    app.listen(CONFIG.port, () => {
+      console.log(`\n🚀 QBO Inventory Sync running on port ${CONFIG.port}`);
+      console.log(`   Dashboard: http://localhost:${CONFIG.port}`);
+      console.log(`   Webhook:   http://localhost:${CONFIG.port}/webhook\n`);
+    });
+  })
+  .catch(err => {
+    console.error('Failed to initialize database:', err);
+    process.exit(1);
+  });
