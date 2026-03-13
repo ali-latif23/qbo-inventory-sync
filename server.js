@@ -699,6 +699,15 @@ app.get('/privacy', (req, res) => {
   <h2>6. Contact</h2><p>For privacy questions, contact your internal IT or system administrator.</p></body></html>`);
 });
 
+app.get('/api/test-email', async (req, res) => {
+  try {
+    await sendDailySummary();
+    res.json({ success: true, message: 'Email sent' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/diagnose/:companyKey', async (req, res) => {
   const { companyKey } = req.params;
   try {
