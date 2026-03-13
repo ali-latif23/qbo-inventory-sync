@@ -425,9 +425,8 @@ async function processInvoiceSync(sourceCompanyKey, invoiceId) {
 // ─── DAILY EMAIL SUMMARY ─────────────────────────────────────────────────────
 async function sendDailySummary() {
   const emailTo = process.env.SUMMARY_EMAIL;
-  const gmailUser = process.env.GMAIL_USER;
-  const gmailPass = process.env.GMAIL_APP_PASSWORD;
-  if (!emailTo || !gmailUser || !gmailPass) return;
+  const sendgridKey = process.env.SENDGRID_API_KEY;
+  if (!emailTo || !sendgridKey) return;
 
   try {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -445,8 +444,7 @@ async function sendDailySummary() {
     const errors = errorRes.rows.map(r => r.message);
 
     const subject = `QBO Inventory Sync — Daily Summary ${new Date().toLocaleDateString()}`;
-    const body = `
-Daily Inventory Sync Summary
+    const body = `Daily Inventory Sync Summary
 =============================
 Date: ${new Date().toLocaleDateString()}
 
@@ -458,16 +456,28 @@ ACTIVITY (last 24 hours):
 
 ${errors.length > 0 ? `RECENT ERRORS:\n${errors.map(e => `- ${e}`).join('\n')}` : 'No errors in the last 24 hours ✅'}
 
-View full dashboard: ${process.env.APP_URL}
-    `.trim();
+View full dashboard: ${process.env.APP_URL}`;
 
-    const nodemailer = require('nodemailer');
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: { user: gmailUser, pass: gmailPass }
+    const sgRes = await fetch('https://api.sendgrid.com/v3/mail/send', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${sendgridKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: emailTo }] }],
+        from: { email: emailTo },
+        subject,
+        content: [{ type: 'text/plain', value: body }]
+      })
     });
-    await transporter.sendMail({ from: gmailUser, to: emailTo, subject, text: body });
-    console.log('📧 Daily summary email sent');
+
+    if (sgRes.ok || sgRes.status === 202) {
+      console.log('📧 Daily summary email sent');
+    } else {
+      const err = await sgRes.text();
+      console.error('SendGrid error:', err);
+    }
   } catch (err) {
     console.error('Failed to send daily summary:', err.message);
   }
