@@ -781,6 +781,7 @@ app.get('/reports', (req, res) => {
 });
 
 
+app.get('/eula', (req, res) => {
   res.send(`<!DOCTYPE html><html><head><title>EULA - Inventory Sync</title>
   <style>body{font-family:sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.6;color:#333}</style></head>
   <body><h1>End-User License Agreement</h1><p><strong>Last updated: March 2026</strong></p>
