@@ -476,7 +476,8 @@ View full dashboard: ${process.env.APP_URL}`;
       console.log('📧 Daily summary email sent');
     } else {
       const err = await sgRes.text();
-      console.error('SendGrid error:', err);
+      console.error('SendGrid error:', sgRes.status, err);
+      throw new Error(`SendGrid ${sgRes.status}: ${err}`);
     }
   } catch (err) {
     console.error('Failed to send daily summary:', err.message);
