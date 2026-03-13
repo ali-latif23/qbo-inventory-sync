@@ -422,81 +422,7 @@ async function processInvoiceSync(sourceCompanyKey, invoiceId) {
   return results;
 }
 
-// ─── DAILY EMAIL SUMMARY ─────────────────────────────────────────────────────
-async function sendDailySummary() {
-  const emailTo = process.env.SUMMARY_EMAIL;
-  const sendgridKey = process.env.SENDGRID_API_KEY;
-  if (!emailTo || !sendgridKey) return;
 
-  try {
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const res = await pool.query(
-      `SELECT type, COUNT(*) as count FROM sync_logs WHERE timestamp > $1 GROUP BY type`,
-      [since]
-    );
-    const counts = {};
-    res.rows.forEach(r => counts[r.type] = parseInt(r.count));
-
-    const errorRes = await pool.query(
-      `SELECT message FROM sync_logs WHERE type = 'error' AND timestamp > $1 ORDER BY timestamp DESC LIMIT 10`,
-      [since]
-    );
-    const errors = errorRes.rows.map(r => r.message);
-
-    const subject = `QBO Inventory Sync — Daily Summary ${new Date().toLocaleDateString()}`;
-    const body = `Daily Inventory Sync Summary
-=============================
-Date: ${new Date().toLocaleDateString()}
-
-ACTIVITY (last 24 hours):
-- Successful syncs: ${counts.success || 0}
-- Errors: ${counts.error || 0}
-- Warnings: ${counts.warning || 0}
-- Info events: ${counts.info || 0}
-
-${errors.length > 0 ? `RECENT ERRORS:\n${errors.map(e => `- ${e}`).join('\n')}` : 'No errors in the last 24 hours ✅'}
-
-View full dashboard: ${process.env.APP_URL}`;
-
-    const sgRes = await fetch('https://api.sendgrid.com/v3/mail/send', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${sendgridKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        personalizations: [{ to: [{ email: emailTo }] }],
-        from: { email: emailTo },
-        subject,
-        content: [{ type: 'text/plain', value: body }]
-      })
-    });
-
-    if (sgRes.ok || sgRes.status === 202) {
-      console.log('📧 Daily summary email sent');
-    } else {
-      const err = await sgRes.text();
-      console.error('SendGrid error:', sgRes.status, err);
-      throw new Error(`SendGrid ${sgRes.status}: ${err}`);
-    }
-  } catch (err) {
-    console.error('Failed to send daily summary:', err.message);
-  }
-}
-
-// Schedule daily summary at 8 AM UTC
-function scheduleDailySummary() {
-  const now = new Date();
-  const next8am = new Date();
-  next8am.setUTCHours(8, 0, 0, 0);
-  if (next8am <= now) next8am.setUTCDate(next8am.getUTCDate() + 1);
-  const msUntil8am = next8am - now;
-  setTimeout(() => {
-    sendDailySummary();
-    setInterval(sendDailySummary, 24 * 60 * 60 * 1000);
-  }, msUntil8am);
-  console.log(`📧 Daily summary scheduled in ${Math.round(msUntil8am / 60000)} minutes`);
-}
 app.post('/webhook', async (req, res) => {
   // Verify webhook signature
   const signature = req.headers['intuit-signature'];
@@ -684,7 +610,177 @@ app.post('/api/test-sync', async (req, res) => {
   }
 });
 
-app.get('/eula', (req, res) => {
+app.get('/api/reports', async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 7;
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    // Summary counts per day
+    const dailyRes = await pool.query(`
+      SELECT 
+        DATE(timestamp) as date,
+        type,
+        COUNT(*) as count
+      FROM sync_logs 
+      WHERE timestamp > $1 
+      GROUP BY DATE(timestamp), type
+      ORDER BY date DESC
+    `, [since]);
+
+    // Recent errors
+    const errorsRes = await pool.query(`
+      SELECT timestamp, message, details
+      FROM sync_logs 
+      WHERE type = 'error' AND timestamp > $1
+      ORDER BY timestamp DESC
+      LIMIT 20
+    `, [since]);
+
+    // Total counts
+    const totalsRes = await pool.query(`
+      SELECT type, COUNT(*) as count
+      FROM sync_logs
+      WHERE timestamp > $1
+      GROUP BY type
+    `, [since]);
+
+    const totals = {};
+    totalsRes.rows.forEach(r => totals[r.type] = parseInt(r.count));
+
+    // Build daily summary
+    const dailyMap = {};
+    dailyRes.rows.forEach(r => {
+      const d = r.date.toISOString().split('T')[0];
+      if (!dailyMap[d]) dailyMap[d] = { date: d, success: 0, error: 0, warning: 0, info: 0 };
+      dailyMap[d][r.type] = parseInt(r.count);
+    });
+
+    res.json({
+      period: `Last ${days} days`,
+      totals,
+      daily: Object.values(dailyMap).sort((a, b) => b.date.localeCompare(a.date)),
+      recentErrors: errorsRes.rows
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/reports', (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <title>QBO Sync — Reports</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; padding: 24px; }
+    h1 { font-size: 24px; font-weight: 700; margin-bottom: 4px; }
+    .subtitle { color: #64748b; margin-bottom: 24px; font-size: 14px; }
+    .nav { margin-bottom: 24px; }
+    .nav a { color: #6366f1; text-decoration: none; font-size: 14px; }
+    .nav a:hover { text-decoration: underline; }
+    .period-btns { display: flex; gap: 8px; margin-bottom: 24px; }
+    .period-btn { padding: 6px 16px; border-radius: 6px; border: 1px solid #2d3748; background: #1e2433; color: #94a3b8; cursor: pointer; font-size: 13px; }
+    .period-btn.active { background: #6366f1; color: white; border-color: #6366f1; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; margin-bottom: 32px; }
+    .card { background: #1e2433; border-radius: 12px; padding: 20px; border: 1px solid #2d3748; }
+    .card-label { font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+    .card-value { font-size: 32px; font-weight: 700; }
+    .card-value.success { color: #10b981; }
+    .card-value.error { color: #ef4444; }
+    .card-value.warning { color: #f59e0b; }
+    .card-value.info { color: #6366f1; }
+    .section { background: #1e2433; border-radius: 12px; border: 1px solid #2d3748; margin-bottom: 24px; overflow: hidden; }
+    .section-header { padding: 16px 20px; border-bottom: 1px solid #2d3748; font-weight: 600; font-size: 15px; }
+    table { width: 100%; border-collapse: collapse; }
+    th { padding: 10px 20px; text-align: left; font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #2d3748; }
+    td { padding: 12px 20px; font-size: 14px; border-bottom: 1px solid #1a2030; }
+    tr:last-child td { border-bottom: none; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+    .badge.success { background: #064e3b; color: #10b981; }
+    .badge.error { background: #450a0a; color: #ef4444; }
+    .badge.warning { background: #451a03; color: #f59e0b; }
+    .empty { padding: 32px; text-align: center; color: #64748b; font-size: 14px; }
+    .error-msg { font-size: 13px; color: #94a3b8; max-width: 500px; }
+    .ts { font-size: 12px; color: #64748b; }
+    .loading { text-align: center; padding: 60px; color: #64748b; }
+  </style>
+</head>
+<body>
+  <div class="nav"><a href="/">← Back to Dashboard</a></div>
+  <h1>📊 Sync Reports</h1>
+  <p class="subtitle" id="subtitle">Loading...</p>
+
+  <div class="period-btns">
+    <button class="period-btn active" onclick="load(1)">Today</button>
+    <button class="period-btn" onclick="load(7)">7 Days</button>
+    <button class="period-btn" onclick="load(30)">30 Days</button>
+  </div>
+
+  <div class="cards">
+    <div class="card"><div class="card-label">Successful Syncs</div><div class="card-value success" id="t-success">—</div></div>
+    <div class="card"><div class="card-label">Errors</div><div class="card-value error" id="t-error">—</div></div>
+    <div class="card"><div class="card-label">Warnings</div><div class="card-value warning" id="t-warning">—</div></div>
+    <div class="card"><div class="card-label">Info Events</div><div class="card-value info" id="t-info">—</div></div>
+  </div>
+
+  <div class="section">
+    <div class="section-header">Daily Breakdown</div>
+    <div id="daily-table"><div class="loading">Loading...</div></div>
+  </div>
+
+  <div class="section">
+    <div class="section-header">Recent Errors</div>
+    <div id="errors-table"><div class="loading">Loading...</div></div>
+  </div>
+
+  <script>
+    let activeDays = 1;
+    document.querySelectorAll('.period-btn').forEach(btn => {
+      btn.addEventListener('click', function() {
+        document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+      });
+    });
+
+    async function load(days) {
+      activeDays = days;
+      document.getElementById('subtitle').textContent = 'Loading...';
+      const res = await fetch('/api/reports?days=' + days);
+      const data = await res.json();
+
+      document.getElementById('subtitle').textContent = data.period + ' — refreshed ' + new Date().toLocaleTimeString();
+      document.getElementById('t-success').textContent = data.totals.success || 0;
+      document.getElementById('t-error').textContent = data.totals.error || 0;
+      document.getElementById('t-warning').textContent = data.totals.warning || 0;
+      document.getElementById('t-info').textContent = data.totals.info || 0;
+
+      if (data.daily.length === 0) {
+        document.getElementById('daily-table').innerHTML = '<div class="empty">No activity in this period</div>';
+      } else {
+        document.getElementById('daily-table').innerHTML = '<table><thead><tr><th>Date</th><th>Successful</th><th>Errors</th><th>Warnings</th></tr></thead><tbody>' +
+          data.daily.map(d => '<tr><td>' + d.date + '</td><td><span class="badge success">' + (d.success||0) + '</span></td><td><span class="badge error">' + (d.error||0) + '</span></td><td><span class="badge warning">' + (d.warning||0) + '</span></td></tr>').join('') +
+          '</tbody></table>';
+      }
+
+      if (data.recentErrors.length === 0) {
+        document.getElementById('errors-table').innerHTML = '<div class="empty">No errors in this period ✅</div>';
+      } else {
+        document.getElementById('errors-table').innerHTML = '<table><thead><tr><th>Time</th><th>Error</th></tr></thead><tbody>' +
+          data.recentErrors.map(e => '<tr><td class="ts">' + new Date(e.timestamp).toLocaleString() + '</td><td class="error-msg">' + e.message + '</td></tr>').join('') +
+          '</tbody></table>';
+      }
+    }
+
+    load(1);
+    setInterval(() => load(activeDays), 30000);
+  </script>
+</body>
+</html>`);
+});
+
+
   res.send(`<!DOCTYPE html><html><head><title>EULA - Inventory Sync</title>
   <style>body{font-family:sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.6;color:#333}</style></head>
   <body><h1>End-User License Agreement</h1><p><strong>Last updated: March 2026</strong></p>
@@ -708,15 +804,6 @@ app.get('/privacy', (req, res) => {
   <h2>4. Third Parties</h2><p>This App uses the Intuit QuickBooks API. Your use of QuickBooks is subject to Intuit's own privacy policy at intuit.com.</p>
   <h2>5. Data Deletion</h2><p>You can remove all stored data by disconnecting your companies via the App dashboard. Contact your system administrator for full data deletion.</p>
   <h2>6. Contact</h2><p>For privacy questions, contact your internal IT or system administrator.</p></body></html>`);
-});
-
-app.get('/api/test-email', async (req, res) => {
-  try {
-    await sendDailySummary();
-    res.json({ success: true, message: 'Email sent' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
 });
 
 app.get('/api/diagnose/:companyKey', async (req, res) => {
@@ -759,7 +846,6 @@ initDb()
       console.log(`\n🚀 QBO Inventory Sync running on port ${CONFIG.port}`);
       console.log(`   Dashboard: http://localhost:${CONFIG.port}`);
       console.log(`   Webhook:   http://localhost:${CONFIG.port}/webhook\n`);
-      scheduleDailySummary();
     });
   })
   .catch(err => {
