@@ -284,26 +284,20 @@ async function updateInventory(itemId, newQty, syncToken, companyKey) {
 
 // ─── CORE SYNC LOGIC ─────────────────────────────────────────────────────────
 
-// Purchase Order in Company 1 → INCREASE master inventory
-async function processPurchaseOrderSync(poId) {
+// Bill in Company 1 → INCREASE master inventory (reflects actual goods received)
+async function processBillSync(billId) {
   const sourceCompany = appData.companies['company1'];
   if (!sourceCompany) throw new Error('Company 1 (master) not connected');
 
-  log('info', `Processing PO ${poId} from Company 1 (master)`, { poId });
+  log('info', `Processing Bill ${billId} from Company 1 (master)`, { billId });
 
-  const data = await qboGet('company1', `purchaseorder/${poId}`);
-  const po = data.PurchaseOrder;
-  if (!po) throw new Error(`PO ${poId} not found`);
+  const data = await qboGet('company1', `bill/${billId}`);
+  const bill = data.Bill;
+  if (!bill) throw new Error(`Bill ${billId} not found`);
 
-  // Only process open/pending POs, not already closed ones
-  if (po.POStatus === 'Closed') {
-    log('info', `PO ${poId} is already closed, skipping`, { poId });
-    return [];
-  }
-
-  const lineItems = po.Line?.filter(l => l.DetailType === 'ItemBasedExpenseLineDetail') || [];
+  const lineItems = bill.Line?.filter(l => l.DetailType === 'ItemBasedExpenseLineDetail') || [];
   if (lineItems.length === 0) {
-    log('info', `PO ${poId} has no item line items`, {});
+    log('info', `Bill ${billId} has no item line items`, {});
     return [];
   }
 
@@ -321,7 +315,7 @@ async function processPurchaseOrderSync(poId) {
       const masterItems = await queryItems('company1', itemName);
 
       if (masterItems.length === 0) {
-        log('warning', `Item "${itemName}" not found in master inventory`, { itemName, poId });
+        log('warning', `Item "${itemName}" not found in master inventory`, { itemName, billId });
         continue;
       }
 
@@ -338,15 +332,15 @@ async function processPurchaseOrderSync(poId) {
 
       if (updateResult.Item) {
         results.push({ itemName, added: qty, from: currentQty, to: newQty });
-        log('success', `Inventory restocked: "${itemName}" ${currentQty} → ${newQty} (+${qty} from PO)`, {
-          itemName, currentQty, newQty, qty, poId,
+        log('success', `Inventory restocked: "${itemName}" ${currentQty} → ${newQty} (+${qty} from Bill)`, {
+          itemName, currentQty, newQty, qty, billId,
           sourceCompany: sourceCompany.name
         });
       } else {
         log('error', `Failed to restock "${itemName}"`, { updateResult, itemName });
       }
     } catch (err) {
-      log('error', `Error processing PO item "${itemName}": ${err.message}`, { itemName, error: err.message });
+      log('error', `Error processing Bill item "${itemName}": ${err.message}`, { itemName, error: err.message });
     }
   }
 
@@ -470,15 +464,15 @@ app.post('/webhook', async (req, res) => {
           await markAsProcessed(companyKey, 'Invoice', entity.id);
         }
 
-        // Purchase Orders from Company 1 ONLY → add to master inventory
-        if (entity.name === 'PurchaseOrder' && isCreateOrUpdate && companyKey === 'company1') {
-          const alreadyDone = await isAlreadyProcessed(companyKey, 'PurchaseOrder', entity.id);
+        // Bills from Company 1 ONLY → add to master inventory (actual goods received)
+        if (entity.name === 'Bill' && isCreateOrUpdate && companyKey === 'company1') {
+          const alreadyDone = await isAlreadyProcessed(companyKey, 'Bill', entity.id);
           if (alreadyDone) {
-            log('info', `PO ${entity.id} already processed, skipping`, {});
+            log('info', `Bill ${entity.id} already processed, skipping`, {});
             continue;
           }
-          await processPurchaseOrderSync(entity.id);
-          await markAsProcessed(companyKey, 'PurchaseOrder', entity.id);
+          await processBillSync(entity.id);
+          await markAsProcessed(companyKey, 'Bill', entity.id);
         }
       }
     }
@@ -590,20 +584,20 @@ app.get('/api/logs', async (req, res) => {
 });
 
 app.post('/api/test-sync', async (req, res) => {
-  const { companyKey, invoiceId, poId, type } = req.body;
+  const { companyKey, invoiceId, billId, type } = req.body;
 
   try {
-    if (type === 'po' && poId) {
+    if (type === 'bill' && req.body.billId) {
       if (companyKey !== 'company1') {
-        return res.status(400).json({ error: 'Purchase Orders only sync from Company 1 (master)' });
+        return res.status(400).json({ error: 'Bills only sync from Company 1 (master)' });
       }
-      const results = await processPurchaseOrderSync(poId);
+      const results = await processBillSync(req.body.billId);
       res.json({ success: true, results });
     } else if (invoiceId) {
       const results = await processInvoiceSync(companyKey, invoiceId);
       res.json({ success: true, results });
     } else {
-      res.status(400).json({ error: 'Provide invoiceId or poId with type=po' });
+      res.status(400).json({ error: 'Provide invoiceId or billId with type=bill' });
     }
   } catch (err) {
     res.status(500).json({ error: err.message });
