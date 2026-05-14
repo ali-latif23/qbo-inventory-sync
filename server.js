@@ -332,7 +332,7 @@ async function processInvoiceSync(sourceCompanyKey, invoiceId) {
       }
 
       const currentQty = masterItem.QtyOnHand || 0;
-      const newQty = Math.max(0, currentQty - qty);
+      const newQty = currentQty - qty;
 
       const updateResult = await updateInventory(masterItem.Id, newQty, masterItem.SyncToken, 'company1');
 
