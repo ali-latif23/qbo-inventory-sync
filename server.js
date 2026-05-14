@@ -869,6 +869,96 @@ app.get('/inventory', (req, res) => {
 </html>`);
 });
 
+app.get('/api/export-csv', async (req, res) => {
+  try {
+    const since = req.query.since || '2026-05-12';
+    const sinceDate = new Date(since + 'T00:00:00Z').toISOString();
+
+    const rows = [];
+
+    // Fetch invoices from all 3 companies
+    for (const companyKey of ['company1', 'company2', 'company3']) {
+      const company = appData.companies[companyKey];
+      if (!company?.tokens) continue;
+      const companyName = company.name || companyKey;
+
+      try {
+        const encoded = encodeURIComponent(`SELECT * FROM Invoice WHERE TxnDate >= '${since}' MAXRESULTS 200`);
+        const data = await qboGet(companyKey, `query?query=${encoded}`);
+        const invoices = data.QueryResponse?.Invoice || [];
+
+        for (const inv of invoices) {
+          const lineItems = inv.Line?.filter(l => l.DetailType === 'SalesItemLineDetail') || [];
+          for (const line of lineItems) {
+            const detail = line.SalesItemLineDetail;
+            const itemName = detail?.ItemRef?.name;
+            if (!itemName) continue;
+            const qty = detail.Qty || 0;
+            rows.push({
+              date: inv.TxnDate,
+              type: 'Invoice',
+              number: inv.DocNumber || inv.Id,
+              company: companyName,
+              item: itemName,
+              qty_out: qty,
+              qty_in: '',
+            });
+          }
+        }
+      } catch (err) {
+        console.error(`Error fetching invoices for ${companyKey}:`, err.message);
+      }
+    }
+
+    // Fetch bills from ProClean only
+    try {
+      const company1 = appData.companies['company1'];
+      if (company1?.tokens) {
+        const encoded = encodeURIComponent(`SELECT * FROM Bill WHERE TxnDate >= '${since}' MAXRESULTS 200`);
+        const data = await qboGet('company1', `query?query=${encoded}`);
+        const bills = data.QueryResponse?.Bill || [];
+
+        for (const bill of bills) {
+          const lineItems = bill.Line?.filter(l => l.DetailType === 'ItemBasedExpenseLineDetail') || [];
+          for (const line of lineItems) {
+            const detail = line.ItemBasedExpenseLineDetail;
+            const itemName = detail?.ItemRef?.name;
+            if (!itemName) continue;
+            const qty = detail.Qty || 0;
+            rows.push({
+              date: bill.TxnDate,
+              type: 'Bill',
+              number: bill.DocNumber || bill.Id,
+              company: company1.name || 'ProClean',
+              item: itemName,
+              qty_out: '',
+              qty_in: qty,
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching bills:', err.message);
+    }
+
+    // Sort by date
+    rows.sort((a, b) => a.date.localeCompare(b.date));
+
+    // Build CSV
+    const header = 'Date,Type,Number,Company,Item,Qty Out (Sold),Qty In (Restocked)\n';
+    const csv = header + rows.map(r =>
+      `${r.date},${r.type},${r.number},"${r.company}","${r.item}",${r.qty_out},${r.qty_in}`
+    ).join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="inventory-movement-since-${since}.csv"`);
+    res.send(csv);
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/reports', async (req, res) => {
   try {
     const days = parseInt(req.query.days) || 7;
