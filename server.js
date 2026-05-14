@@ -284,69 +284,6 @@ async function updateInventory(itemId, newQty, syncToken, companyKey) {
 
 // ─── CORE SYNC LOGIC ─────────────────────────────────────────────────────────
 
-// Bill in Company 1 → INCREASE master inventory (reflects actual goods received)
-async function processBillSync(billId) {
-  const sourceCompany = appData.companies['company1'];
-  if (!sourceCompany) throw new Error('Company 1 (master) not connected');
-
-  log('info', `Processing Bill ${billId} from Company 1 (master)`, { billId });
-
-  const data = await qboGet('company1', `bill/${billId}`);
-  const bill = data.Bill;
-  if (!bill) throw new Error(`Bill ${billId} not found`);
-
-  const lineItems = bill.Line?.filter(l => l.DetailType === 'ItemBasedExpenseLineDetail') || [];
-  if (lineItems.length === 0) {
-    log('info', `Bill ${billId} has no item line items`, {});
-    return [];
-  }
-
-  const results = [];
-
-  for (const line of lineItems) {
-    const detail = line.ItemBasedExpenseLineDetail;
-    const itemRef = detail?.ItemRef;
-    if (!itemRef) continue;
-
-    const qty = detail.Qty || 0;
-    const itemName = itemRef.name;
-
-    try {
-      const masterItems = await queryItems('company1', itemName);
-
-      if (masterItems.length === 0) {
-        log('warning', `Item "${itemName}" not found in master inventory`, { itemName, billId });
-        continue;
-      }
-
-      const masterItem = masterItems[0];
-      if (masterItem.Type !== 'Inventory') {
-        log('info', `Item "${itemName}" is not inventory type, skipping`, { itemName });
-        continue;
-      }
-
-      const currentQty = masterItem.QtyOnHand || 0;
-      const newQty = currentQty + qty;
-
-      const updateResult = await updateInventory(masterItem.Id, newQty, masterItem.SyncToken, 'company1');
-
-      if (updateResult.Item) {
-        results.push({ itemName, added: qty, from: currentQty, to: newQty });
-        log('success', `Inventory restocked: "${itemName}" ${currentQty} → ${newQty} (+${qty} from Bill)`, {
-          itemName, currentQty, newQty, qty, billId,
-          sourceCompany: sourceCompany.name
-        });
-      } else {
-        log('error', `Failed to restock "${itemName}"`, { updateResult, itemName });
-      }
-    } catch (err) {
-      log('error', `Error processing Bill item "${itemName}": ${err.message}`, { itemName, error: err.message });
-    }
-  }
-
-  return results;
-}
-
 // Invoice in any company → DECREASE master inventory
 async function processInvoiceSync(sourceCompanyKey, invoiceId) {
   const sourceCompany = appData.companies[sourceCompanyKey];
@@ -453,8 +390,9 @@ app.post('/webhook', async (req, res) => {
       for (const entity of entities) {
         const isCreateOrUpdate = entity.operation === 'Create' || entity.operation === 'Update';
 
-        // Invoices from ANY company → deduct from master inventory
-        if (entity.name === 'Invoice' && isCreateOrUpdate) {
+        // Invoices from Company 2 or 3 ONLY → deduct from master inventory
+        // ProClean (company1) invoices are skipped — QBO handles natively
+        if (entity.name === 'Invoice' && isCreateOrUpdate && companyKey !== 'company1') {
           const alreadyDone = await isAlreadyProcessed(companyKey, 'Invoice', entity.id);
           if (alreadyDone) {
             log('info', `Invoice ${entity.id} from ${companyKey} already processed, skipping`, {});
@@ -462,17 +400,6 @@ app.post('/webhook', async (req, res) => {
           }
           await processInvoiceSync(companyKey, entity.id);
           await markAsProcessed(companyKey, 'Invoice', entity.id);
-        }
-
-        // Bills from Company 1 ONLY → add to master inventory (actual goods received)
-        if (entity.name === 'Bill' && isCreateOrUpdate && companyKey === 'company1') {
-          const alreadyDone = await isAlreadyProcessed(companyKey, 'Bill', entity.id);
-          if (alreadyDone) {
-            log('info', `Bill ${entity.id} already processed, skipping`, {});
-            continue;
-          }
-          await processBillSync(entity.id);
-          await markAsProcessed(companyKey, 'Bill', entity.id);
         }
       }
     }
@@ -584,20 +511,17 @@ app.get('/api/logs', async (req, res) => {
 });
 
 app.post('/api/test-sync', async (req, res) => {
-  const { companyKey, invoiceId, billId, type } = req.body;
+  const { companyKey, invoiceId } = req.body;
 
   try {
-    if (type === 'bill' && req.body.billId) {
-      if (companyKey !== 'company1') {
-        return res.status(400).json({ error: 'Bills only sync from Company 1 (master)' });
+    if (invoiceId) {
+      if (companyKey === 'company1') {
+        return res.status(400).json({ error: 'ProClean invoices are handled by QBO natively' });
       }
-      const results = await processBillSync(req.body.billId);
-      res.json({ success: true, results });
-    } else if (invoiceId) {
       const results = await processInvoiceSync(companyKey, invoiceId);
       res.json({ success: true, results });
     } else {
-      res.status(400).json({ error: 'Provide invoiceId or billId with type=bill' });
+      res.status(400).json({ error: 'Provide invoiceId' });
     }
   } catch (err) {
     res.status(500).json({ error: err.message });
