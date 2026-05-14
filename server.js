@@ -665,6 +665,17 @@ app.post('/api/inventory/edit', async (req, res) => {
   }
 });
 
+app.post('/api/inventory/delete', async (req, res) => {
+  const { itemName } = req.body;
+  if (!itemName) return res.status(400).json({ error: 'itemName required' });
+  try {
+    await pool.query('DELETE FROM app_inventory WHERE item_name = $1', [itemName]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Fetch live QBO quantity for a single item (for comparison)
 app.get('/api/inventory/qbo/:itemName', async (req, res) => {
   try {
@@ -794,6 +805,7 @@ app.get('/inventory', (req, res) => {
           <td>
             <input type="number" class="edit-input" id="edit-\${encodeURIComponent(item.item_name)}" value="\${qty}" step="1">
             <button class="btn-primary btn-sm" style="margin-left:6px" onclick="saveEdit('\${item.item_name.replace(/'/g, "\\\\'")}')">Save</button>
+            <button class="btn-danger btn-sm" style="margin-left:4px" onclick="deleteItem('\${item.item_name.replace(/'/g, "\\\\'")}')">✕</button>
           </td>
         </tr>\`;
       }).join('');
@@ -817,6 +829,17 @@ app.get('/inventory', (req, res) => {
         body: JSON.stringify({ itemName, newQty, reason: 'manual_edit' })
       });
       showBanner('✅ ' + itemName + ' updated to ' + newQty);
+      loadInventory();
+    }
+
+    async function deleteItem(itemName) {
+      if (!confirm('Remove "' + itemName + '" from the app tracker? This will not affect QBO.')) return;
+      await fetch('/api/inventory/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemName })
+      });
+      showBanner('🗑 ' + itemName + ' removed from tracker');
       loadInventory();
     }
 
