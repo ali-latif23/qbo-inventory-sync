@@ -33,8 +33,42 @@ async function initDb() {
       transaction_type TEXT NOT NULL,
       processed_at TIMESTAMPTZ DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS app_inventory (
+      item_name TEXT PRIMARY KEY,
+      sku TEXT,
+      qty_on_hand NUMERIC NOT NULL DEFAULT 0,
+      last_updated TIMESTAMPTZ DEFAULT NOW(),
+      last_updated_by TEXT DEFAULT 'system'
+    );
   `);
   console.log('✅ Database initialized');
+}
+
+async function appInventoryAdjust(itemName, delta, reason) {
+  try {
+    await pool.query(`
+      INSERT INTO app_inventory (item_name, qty_on_hand, last_updated, last_updated_by)
+      VALUES ($1, $2, NOW(), $3)
+      ON CONFLICT (item_name) DO UPDATE
+        SET qty_on_hand = app_inventory.qty_on_hand + $2,
+            last_updated = NOW(),
+            last_updated_by = $3
+    `, [itemName, delta, reason]);
+  } catch (err) {
+    console.error(`App inventory adjust error for ${itemName}:`, err.message);
+  }
+}
+
+async function appInventorySet(itemName, sku, qty) {
+  await pool.query(`
+    INSERT INTO app_inventory (item_name, sku, qty_on_hand, last_updated, last_updated_by)
+    VALUES ($1, $2, $3, NOW(), 'qbo_import')
+    ON CONFLICT (item_name) DO UPDATE
+      SET sku = $2,
+          qty_on_hand = $3,
+          last_updated = NOW(),
+          last_updated_by = 'qbo_import'
+  `, [itemName, sku || '', qty]);
 }
 
 async function isAlreadyProcessed(companyKey, transactionType, transactionId) {
@@ -342,6 +376,7 @@ async function processInvoiceSync(sourceCompanyKey, invoiceId) {
           itemName, currentQty, newQty, qty, invoiceId,
           sourceCompany: sourceCompany.name
         });
+        await appInventoryAdjust(itemName, -qty, `invoice:${invoiceId}:${sourceCompany.name}`);
       } else {
         log('error', `Failed to update "${itemName}"`, { updateResult, itemName });
       }
@@ -351,6 +386,40 @@ async function processInvoiceSync(sourceCompanyKey, invoiceId) {
   }
 
   return results;
+}
+
+// ProClean invoice → only update app tracker (QBO handles QtyOnHand natively)
+async function processInvoiceSyncAppOnly(invoiceId) {
+  const data = await getInvoiceWithRetry('company1', invoiceId);
+  const invoice = data?.Invoice;
+  if (!invoice) return;
+
+  const lineItems = invoice.Line?.filter(l => l.DetailType === 'SalesItemLineDetail') || [];
+  for (const line of lineItems) {
+    const detail = line.SalesItemLineDetail;
+    const itemName = detail?.ItemRef?.name;
+    if (!itemName) continue;
+    const qty = detail.Qty || 0;
+    await appInventoryAdjust(itemName, -qty, `invoice:${invoiceId}:ProClean`);
+  }
+  log('info', `App tracker updated for ProClean invoice ${invoiceId}`, { invoiceId });
+}
+
+// Bill from ProClean → only update app tracker (QBO handles QtyOnHand natively)
+async function processBillAppOnly(billId) {
+  const data = await qboGet('company1', `bill/${billId}`);
+  const bill = data?.Bill;
+  if (!bill) return;
+
+  const lineItems = bill.Line?.filter(l => l.DetailType === 'ItemBasedExpenseLineDetail') || [];
+  for (const line of lineItems) {
+    const detail = line.ItemBasedExpenseLineDetail;
+    const itemName = detail?.ItemRef?.name;
+    if (!itemName) continue;
+    const qty = detail.Qty || 0;
+    await appInventoryAdjust(itemName, qty, `bill:${billId}:ProClean`);
+  }
+  log('info', `App tracker updated for ProClean bill ${billId} (+stock)`, { billId });
 }
 
 
@@ -390,16 +459,31 @@ app.post('/webhook', async (req, res) => {
       for (const entity of entities) {
         const isCreateOrUpdate = entity.operation === 'Create' || entity.operation === 'Update';
 
-        // Invoices from Company 2 or 3 ONLY → deduct from master inventory
-        // ProClean (company1) invoices are skipped — QBO handles natively
-        if (entity.name === 'Invoice' && isCreateOrUpdate && companyKey !== 'company1') {
+        // Invoices from Company 2 or 3 ONLY → deduct from master inventory (QBO + app tracker)
+        // ProClean (company1) invoices → only update app tracker, QBO handles natively
+        if (entity.name === 'Invoice' && isCreateOrUpdate) {
           const alreadyDone = await isAlreadyProcessed(companyKey, 'Invoice', entity.id);
           if (alreadyDone) {
             log('info', `Invoice ${entity.id} from ${companyKey} already processed, skipping`, {});
             continue;
           }
-          await processInvoiceSync(companyKey, entity.id);
+          if (companyKey !== 'company1') {
+            await processInvoiceSync(companyKey, entity.id);
+          } else {
+            await processInvoiceSyncAppOnly(entity.id);
+          }
           await markAsProcessed(companyKey, 'Invoice', entity.id);
+        }
+
+        // Bills from Company 1 → only update app tracker (QBO handles inventory natively)
+        if (entity.name === 'Bill' && isCreateOrUpdate && companyKey === 'company1') {
+          const alreadyDone = await isAlreadyProcessed(companyKey, 'Bill', entity.id);
+          if (alreadyDone) {
+            log('info', `Bill ${entity.id} already processed, skipping`, {});
+            continue;
+          }
+          await processBillAppOnly(entity.id);
+          await markAsProcessed(companyKey, 'Bill', entity.id);
         }
       }
     }
@@ -526,6 +610,240 @@ app.post('/api/test-sync', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ─── APP INVENTORY API ────────────────────────────────────────────────────────
+
+// Initialize from QBO — fetch all inventory items and store as baseline
+app.post('/api/inventory/init', async (req, res) => {
+  try {
+    if (!appData.companies['company1']?.tokens) {
+      return res.status(400).json({ error: 'ProClean not connected' });
+    }
+    let startPos = 1;
+    let totalFetched = 0;
+    while (true) {
+      const encoded = encodeURIComponent(`SELECT * FROM Item WHERE Type = 'Inventory' STARTPOSITION ${startPos} MAXRESULTS 100`);
+      const data = await qboGet('company1', `query?query=${encoded}`);
+      const items = data.QueryResponse?.Item || [];
+      if (items.length === 0) break;
+      for (const item of items) {
+        await appInventorySet(item.Name, item.Sku || '', item.QtyOnHand || 0);
+      }
+      totalFetched += items.length;
+      if (items.length < 100) break;
+      startPos += 100;
+    }
+    res.json({ success: true, itemsImported: totalFetched });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get all app inventory items
+app.get('/api/inventory', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM app_inventory ORDER BY item_name ASC');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Manually edit a single item quantity
+app.post('/api/inventory/edit', async (req, res) => {
+  const { itemName, newQty, reason } = req.body;
+  if (!itemName || newQty === undefined) return res.status(400).json({ error: 'itemName and newQty required' });
+  try {
+    await pool.query(`
+      UPDATE app_inventory SET qty_on_hand = $1, last_updated = NOW(), last_updated_by = $2
+      WHERE item_name = $3
+    `, [newQty, reason || 'manual_edit', itemName]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch live QBO quantity for a single item (for comparison)
+app.get('/api/inventory/qbo/:itemName', async (req, res) => {
+  try {
+    const items = await queryItems('company1', req.params.itemName);
+    if (items.length === 0) return res.json({ qboQty: null });
+    res.json({ qboQty: items[0].QtyOnHand });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/inventory', (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <title>QBO Sync — Inventory Tracker</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; padding: 24px; }
+    h1 { font-size: 24px; font-weight: 700; margin-bottom: 4px; }
+    .subtitle { color: #64748b; margin-bottom: 24px; font-size: 14px; }
+    .nav { margin-bottom: 24px; }
+    .nav a { color: #6366f1; text-decoration: none; font-size: 14px; }
+    .top-bar { display: flex; gap: 12px; align-items: center; margin-bottom: 24px; flex-wrap: wrap; }
+    input[type=text] { background: #1e2433; border: 1px solid #2d3748; border-radius: 8px; color: #e2e8f0; padding: 8px 14px; font-size: 14px; width: 260px; }
+    input[type=text]::placeholder { color: #4a5568; }
+    button { padding: 8px 18px; border-radius: 8px; border: none; font-size: 14px; cursor: pointer; font-weight: 600; }
+    .btn-primary { background: #6366f1; color: white; }
+    .btn-primary:hover { background: #4f46e5; }
+    .btn-secondary { background: #1e2433; color: #94a3b8; border: 1px solid #2d3748; }
+    .btn-secondary:hover { background: #2d3748; }
+    .btn-danger { background: #450a0a; color: #ef4444; border: 1px solid #7f1d1d; }
+    .btn-sm { padding: 4px 10px; font-size: 12px; border-radius: 6px; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .stat { background: #1e2433; border-radius: 12px; padding: 16px 20px; border: 1px solid #2d3748; }
+    .stat-label { font-size: 12px; color: #64748b; margin-bottom: 6px; }
+    .stat-value { font-size: 28px; font-weight: 700; color: #6366f1; }
+    .table-wrap { background: #1e2433; border-radius: 12px; border: 1px solid #2d3748; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; }
+    th { padding: 10px 16px; text-align: left; font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #2d3748; }
+    td { padding: 10px 16px; font-size: 14px; border-bottom: 1px solid #1a2030; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #252d3d; }
+    .qty { font-weight: 700; }
+    .qty.negative { color: #ef4444; }
+    .qty.low { color: #f59e0b; }
+    .qty.ok { color: #10b981; }
+    .diff.positive { color: #10b981; font-size: 12px; }
+    .diff.negative-diff { color: #ef4444; font-size: 12px; }
+    .diff.match { color: #64748b; font-size: 12px; }
+    .edit-input { background: #0f1117; border: 1px solid #6366f1; border-radius: 6px; color: #e2e8f0; padding: 4px 8px; font-size: 13px; width: 80px; }
+    .ts { font-size: 11px; color: #4a5568; }
+    .loading { text-align: center; padding: 40px; color: #64748b; }
+    .banner { background: #1e3a5f; border: 1px solid #2d5a8e; border-radius: 10px; padding: 14px 18px; margin-bottom: 20px; font-size: 14px; color: #93c5fd; display: none; }
+    .banner.show { display: block; }
+  </style>
+</head>
+<body>
+  <div class="nav"><a href="/">← Back to Dashboard</a></div>
+  <h1>📦 App Inventory Tracker</h1>
+  <p class="subtitle">Independent tracker — never writes to QBO</p>
+
+  <div class="banner" id="banner"></div>
+
+  <div class="top-bar">
+    <input type="text" id="search" placeholder="Search items..." oninput="filterTable()">
+    <button class="btn-primary" onclick="initFromQBO()">⬇ Initialize from QBO</button>
+    <button class="btn-secondary" onclick="loadInventory()">↻ Refresh</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="stat-label">Total Items</div><div class="stat-value" id="stat-total">—</div></div>
+    <div class="stat"><div class="stat-label">Negative Stock</div><div class="stat-value" style="color:#ef4444" id="stat-negative">—</div></div>
+    <div class="stat"><div class="stat-label">Zero Stock</div><div class="stat-value" style="color:#f59e0b" id="stat-zero">—</div></div>
+    <div class="stat"><div class="stat-label">In Stock</div><div class="stat-value" style="color:#10b981" id="stat-instock">—</div></div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Item Name</th>
+          <th>App Qty</th>
+          <th>Last Updated</th>
+          <th>Updated By</th>
+          <th>Edit</th>
+        </tr>
+      </thead>
+      <tbody id="inv-body">
+        <tr><td colspan="5" class="loading">Loading inventory...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    let allItems = [];
+
+    async function loadInventory() {
+      const res = await fetch('/api/inventory');
+      allItems = await res.json();
+      renderTable(allItems);
+      updateStats(allItems);
+    }
+
+    function updateStats(items) {
+      document.getElementById('stat-total').textContent = items.length;
+      document.getElementById('stat-negative').textContent = items.filter(i => parseFloat(i.qty_on_hand) < 0).length;
+      document.getElementById('stat-zero').textContent = items.filter(i => parseFloat(i.qty_on_hand) === 0).length;
+      document.getElementById('stat-instock').textContent = items.filter(i => parseFloat(i.qty_on_hand) > 0).length;
+    }
+
+    function renderTable(items) {
+      if (items.length === 0) {
+        document.getElementById('inv-body').innerHTML = '<tr><td colspan="5" class="loading">No items yet — click "Initialize from QBO" to import</td></tr>';
+        return;
+      }
+      document.getElementById('inv-body').innerHTML = items.map(item => {
+        const qty = parseFloat(item.qty_on_hand);
+        const qtyClass = qty < 0 ? 'negative' : qty === 0 ? 'low' : 'ok';
+        const ts = new Date(item.last_updated).toLocaleString();
+        return \`<tr>
+          <td><strong>\${item.item_name}</strong>\${item.sku ? '<br><span class="ts">SKU: ' + item.sku + '</span>' : ''}</td>
+          <td><span class="qty \${qtyClass}">\${qty}</span></td>
+          <td class="ts">\${ts}</td>
+          <td class="ts">\${item.last_updated_by}</td>
+          <td>
+            <input type="number" class="edit-input" id="edit-\${encodeURIComponent(item.item_name)}" value="\${qty}" step="1">
+            <button class="btn-primary btn-sm" style="margin-left:6px" onclick="saveEdit('\${item.item_name.replace(/'/g, "\\\\'")}')">Save</button>
+          </td>
+        </tr>\`;
+      }).join('');
+    }
+
+    function filterTable() {
+      const q = document.getElementById('search').value.toLowerCase();
+      const filtered = allItems.filter(i => i.item_name.toLowerCase().includes(q) || (i.sku || '').toLowerCase().includes(q));
+      renderTable(filtered);
+      updateStats(filtered);
+    }
+
+    async function saveEdit(itemName) {
+      const encoded = encodeURIComponent(itemName);
+      const input = document.getElementById('edit-' + encoded);
+      const newQty = parseFloat(input.value);
+      if (isNaN(newQty)) return;
+      await fetch('/api/inventory/edit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemName, newQty, reason: 'manual_edit' })
+      });
+      showBanner('✅ ' + itemName + ' updated to ' + newQty);
+      loadInventory();
+    }
+
+    async function initFromQBO() {
+      showBanner('⏳ Importing from QBO... this may take a moment');
+      const res = await fetch('/api/inventory/init', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        showBanner('✅ Imported ' + data.itemsImported + ' items from QBO');
+        loadInventory();
+      } else {
+        showBanner('❌ Error: ' + data.error);
+      }
+    }
+
+    function showBanner(msg) {
+      const b = document.getElementById('banner');
+      b.textContent = msg;
+      b.classList.add('show');
+      setTimeout(() => b.classList.remove('show'), 4000);
+    }
+
+    loadInventory();
+    setInterval(loadInventory, 30000);
+  </script>
+</body>
+</html>`);
 });
 
 app.get('/api/reports', async (req, res) => {
