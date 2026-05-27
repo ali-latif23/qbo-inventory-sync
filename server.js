@@ -1176,56 +1176,70 @@ app.get('/api/diagnose/:companyKey', async (req, res) => {
 });
 
 // ─── PHYSICAL INVENTORY PUSH ─────────────────────────────────────────────────
-app.get('/api/push-physical-inventory', async (req, res) => {
-  const dryRun = req.query.dry !== 'false';
+let physicalPushStatus = null; // tracks current/last run
+
+async function runPhysicalPush(dryRun) {
   const XLSX = require('xlsx');
-  const path = require('path');
+  const wb = XLSX.readFile(path.join(__dirname, 'newinvupdate.xlsx'));
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
 
-  try {
-    const wb = XLSX.readFile(path.join(__dirname, 'newinvupdate.xlsx'));
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+  const items = [];
+  for (const row of rows) {
+    const name = row[0];
+    const qty = row[2];
+    if (!name || typeof name !== 'string') continue;
+    if (name === 'Product/Service' || name === 'Physical Inventory Worksheet') continue;
+    const resolvedQty = (qty === null || qty === undefined || qty === '') ? 0 : qty;
+    if (typeof resolvedQty !== 'number') continue;
+    items.push({ name: name.trim(), qty: resolvedQty });
+  }
 
-    const items = [];
-    for (const row of rows) {
-      const name = row[0];
-      const qty = row[2];
-      if (!name || typeof name !== 'string') continue;
-      if (name === 'Product/Service' || name === 'Physical Inventory Worksheet') continue;
-      const resolvedQty = (qty === null || qty === undefined || qty === '') ? 0 : qty;
-      if (typeof resolvedQty !== 'number') continue;
-      items.push({ name: name.trim(), qty: resolvedQty });
-    }
+  physicalPushStatus = { running: true, dryRun, total: items.length, done: 0, updated: [], skipped: [], errors: [], startedAt: new Date().toISOString() };
 
-    const results = { updated: [], skipped: [], errors: [] };
+  for (const { name, qty } of items) {
+    try {
+      const encoded = encodeURIComponent(`SELECT * FROM Item WHERE Name = '${name.replace(/'/g, "\\'")}'`);
+      const data = await qboGet('company1', `query?query=${encoded}`);
+      const item = data.QueryResponse?.Item?.[0];
 
-    for (const { name, qty } of items) {
-      try {
-        const encoded = encodeURIComponent(`SELECT * FROM Item WHERE Name = '${name.replace(/'/g, "\\'")}'`);
-        const data = await qboGet('company1', `query?query=${encoded}`);
-        const item = data.QueryResponse?.Item?.[0];
-
-        if (!item) { results.skipped.push({ name, reason: 'Not found in QBO' }); continue; }
-        if (item.Type !== 'Inventory') { results.skipped.push({ name, reason: `Non-inventory: ${item.Type}` }); continue; }
-
+      if (!item) { physicalPushStatus.skipped.push({ name, reason: 'Not found in QBO' }); }
+      else if (item.Type !== 'Inventory') { physicalPushStatus.skipped.push({ name, reason: `Non-inventory: ${item.Type}` }); }
+      else {
         const currentQty = item.QtyOnHand;
         if (!dryRun) {
           const result = await updateInventory(item.Id, qty, item.SyncToken, 'company1');
-          if (result.Item) results.updated.push({ name, from: currentQty, to: qty });
-          else results.errors.push({ name, error: JSON.stringify(result.Fault || result) });
+          if (result.Item) physicalPushStatus.updated.push({ name, from: currentQty, to: qty });
+          else physicalPushStatus.errors.push({ name, error: JSON.stringify(result.Fault || result) });
         } else {
-          results.updated.push({ name, from: currentQty, to: qty, dryRun: true });
+          physicalPushStatus.updated.push({ name, from: currentQty, to: qty, dryRun: true });
         }
-        await new Promise(r => setTimeout(r, 200));
-      } catch (err) {
-        results.errors.push({ name, error: err.message });
       }
+      await new Promise(r => setTimeout(r, 150));
+    } catch (err) {
+      physicalPushStatus.errors.push({ name, error: err.message });
     }
-
-    res.json({ dryRun, itemsInSheet: items.length, ...results });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    physicalPushStatus.done++;
   }
+  physicalPushStatus.running = false;
+  physicalPushStatus.finishedAt = new Date().toISOString();
+  log('success', `Physical inventory push complete — ${physicalPushStatus.updated.length} updated, ${physicalPushStatus.skipped.length} skipped, ${physicalPushStatus.errors.length} errors`, { dryRun });
+}
+
+// Start a push (dry run by default)
+app.get('/api/push-physical-inventory', (req, res) => {
+  const dryRun = req.query.dry !== 'false';
+  if (physicalPushStatus?.running) return res.json({ message: 'Already running', status: physicalPushStatus });
+  runPhysicalPush(dryRun).catch(err => {
+    if (physicalPushStatus) { physicalPushStatus.running = false; physicalPushStatus.fatalError = err.message; }
+  });
+  res.json({ message: dryRun ? 'Dry run started' : 'Push started', dryRun, note: 'Poll /api/push-physical-inventory/status to track progress' });
+});
+
+// Check status / results
+app.get('/api/push-physical-inventory/status', (req, res) => {
+  if (!physicalPushStatus) return res.json({ message: 'No push has been run yet' });
+  res.json(physicalPushStatus);
 });
 
 app.post('/api/disconnect/:companyKey', (req, res) => {
