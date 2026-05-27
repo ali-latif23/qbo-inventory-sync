@@ -1325,9 +1325,9 @@ app.get('/api/proclean/stats', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// PATCH item (qty and/or name) → writes to QBO
+// PATCH item (qty, name, uom) → writes to QBO
 app.patch('/api/proclean/items/:qboId', async (req, res) => {
-  const { qty_on_hand, name, note } = req.body;
+  const { qty_on_hand, name, uom, note } = req.body;
   try {
     const dbResult = await pool.query('SELECT * FROM proclean_items WHERE qbo_id = $1', [req.params.qboId]);
     if (!dbResult.rows.length) return res.status(404).json({ error: 'Item not found' });
@@ -1339,10 +1339,11 @@ app.patch('/api/proclean/items/:qboId', async (req, res) => {
 
     const updatedItem = qboResult.Item;
     const updatedName = name !== undefined ? name : item.name;
+    const updatedUom = uom !== undefined ? uom : item.uom;
 
     await pool.query(
-      'UPDATE proclean_items SET qty_on_hand=$1, sync_token=$2, name=$3, last_synced=NOW(), last_updated_by=$4 WHERE qbo_id=$5',
-      [updatedItem.QtyOnHand, updatedItem.SyncToken, updatedName, 'website', item.qbo_id]
+      'UPDATE proclean_items SET qty_on_hand=$1, sync_token=$2, name=$3, uom=$4, last_synced=NOW(), last_updated_by=$5 WHERE qbo_id=$6',
+      [updatedItem.QtyOnHand, updatedItem.SyncToken, updatedName, updatedUom, 'website', item.qbo_id]
     );
 
     if (qty_on_hand !== undefined && parseFloat(qty_on_hand) !== parseFloat(item.qty_on_hand)) {
