@@ -1239,16 +1239,31 @@ async function syncProCleanItemsFromQBO() {
   if (!appData.companies['company1']?.tokens) return;
   try {
     let startPos = 1;
+    const seenIds = [];
     while (true) {
       const encoded = encodeURIComponent('SELECT * FROM Item WHERE Type = \'Inventory\' STARTPOSITION ' + startPos + ' MAXRESULTS 100');
       const data = await qboGet('company1', 'query?query=' + encoded);
       const items = data.QueryResponse?.Item || [];
       if (items.length === 0) break;
-      for (const item of items) await pcUpsertItem(item);
+      for (const item of items) {
+        await pcUpsertItem(item);
+        seenIds.push(item.Id);
+      }
       if (items.length < 100) break;
       startPos += 100;
     }
-    console.log('[ProClean] QBO sync complete');
+    // Remove any items in our DB that no longer exist in QBO
+    if (seenIds.length > 0) {
+      const placeholders = seenIds.map((_, i) => '$' + (i + 1)).join(',');
+      const deleted = await pool.query(
+        'DELETE FROM proclean_items WHERE qbo_id NOT IN (' + placeholders + ') RETURNING name',
+        seenIds
+      );
+      if (deleted.rows.length > 0) {
+        console.log('[ProClean] Removed ' + deleted.rows.length + ' deleted QBO items: ' + deleted.rows.map(r => r.name).join(', '));
+      }
+    }
+    console.log('[ProClean] QBO sync complete — ' + seenIds.length + ' items');
   } catch (err) {
     console.error('[ProClean Sync] Poll error:', err.message);
   }
