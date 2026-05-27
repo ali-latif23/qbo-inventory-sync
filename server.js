@@ -1175,6 +1175,59 @@ app.get('/api/diagnose/:companyKey', async (req, res) => {
   }
 });
 
+// ─── PHYSICAL INVENTORY PUSH ─────────────────────────────────────────────────
+app.get('/api/push-physical-inventory', async (req, res) => {
+  const dryRun = req.query.dry !== 'false';
+  const XLSX = require('xlsx');
+  const path = require('path');
+
+  try {
+    const wb = XLSX.readFile(path.join(__dirname, 'newinvupdate.xlsx'));
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+
+    const items = [];
+    for (const row of rows) {
+      const name = row[0];
+      const qty = row[2];
+      if (!name || typeof name !== 'string') continue;
+      if (name === 'Product/Service' || name === 'Physical Inventory Worksheet') continue;
+      const resolvedQty = (qty === null || qty === undefined || qty === '') ? 0 : qty;
+      if (typeof resolvedQty !== 'number') continue;
+      items.push({ name: name.trim(), qty: resolvedQty });
+    }
+
+    const results = { updated: [], skipped: [], errors: [] };
+
+    for (const { name, qty } of items) {
+      try {
+        const encoded = encodeURIComponent(`SELECT * FROM Item WHERE Name = '${name.replace(/'/g, "\\'")}'`);
+        const data = await qboGet('company1', `query?query=${encoded}`);
+        const item = data.QueryResponse?.Item?.[0];
+
+        if (!item) { results.skipped.push({ name, reason: 'Not found in QBO' }); continue; }
+        if (item.Type !== 'Inventory') { results.skipped.push({ name, reason: `Non-inventory: ${item.Type}` }); continue; }
+
+        const currentQty = item.QtyOnHand;
+        if (!dryRun) {
+          const result = await updateInventory(item.Id, qty, item.SyncToken, 'company1');
+          if (result.Item) results.updated.push({ name, from: currentQty, to: qty });
+          else results.errors.push({ name, error: JSON.stringify(result.Fault || result) });
+        } else {
+          results.updated.push({ name, from: currentQty, to: qty, dryRun: true });
+        }
+        await new Promise(r => setTimeout(r, 200));
+      } catch (err) {
+        results.errors.push({ name, error: err.message });
+      }
+    }
+
+    res.json({ dryRun, itemsInSheet: items.length, ...results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/disconnect/:companyKey', (req, res) => {
   const { companyKey } = req.params;
   if (appData.companies[companyKey]) {
