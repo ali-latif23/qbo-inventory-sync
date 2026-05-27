@@ -40,6 +40,27 @@ async function initDb() {
       last_updated TIMESTAMPTZ DEFAULT NOW(),
       last_updated_by TEXT DEFAULT 'system'
     );
+    CREATE TABLE IF NOT EXISTS proclean_items (
+      qbo_id TEXT PRIMARY KEY,
+      sync_token TEXT NOT NULL DEFAULT '0',
+      name TEXT NOT NULL,
+      sku TEXT,
+      uom TEXT,
+      qty_on_hand NUMERIC NOT NULL DEFAULT 0,
+      item_type TEXT DEFAULT 'Inventory',
+      last_synced TIMESTAMPTZ DEFAULT NOW(),
+      last_updated_by TEXT DEFAULT 'qbo'
+    );
+    CREATE TABLE IF NOT EXISTS proclean_movements (
+      id SERIAL PRIMARY KEY,
+      qbo_id TEXT NOT NULL REFERENCES proclean_items(qbo_id) ON DELETE CASCADE,
+      item_name TEXT NOT NULL,
+      quantity NUMERIC NOT NULL,
+      movement_type TEXT NOT NULL,
+      source TEXT,
+      note TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
   `);
   console.log('✅ Database initialized');
 }
@@ -377,6 +398,14 @@ async function processInvoiceSync(sourceCompanyKey, invoiceId) {
           sourceCompany: sourceCompany.name
         });
         await appInventoryAdjust(itemName, -qty, `invoice:${invoiceId}:${sourceCompany.name}`);
+        // Update proclean_items tracker
+        try {
+          await pool.query(
+            'UPDATE proclean_items SET qty_on_hand=$1, sync_token=$2, last_synced=NOW(), last_updated_by=$3 WHERE qbo_id=$4',
+            [newQty, updateResult.Item.SyncToken, 'invoice:' + sourceCompany.name, masterItem.Id]
+          );
+          await pcLogMovement(masterItem.Id, itemName, qty, 'deduction', 'invoice:' + sourceCompany.name, 'Invoice ' + invoiceId + ' from ' + sourceCompany.name);
+        } catch(e) { console.error('proclean_items update error:', e.message); }
       } else {
         log('error', `Failed to update "${itemName}"`, { updateResult, itemName });
       }
@@ -1175,73 +1204,6 @@ app.get('/api/diagnose/:companyKey', async (req, res) => {
   }
 });
 
-// ─── PHYSICAL INVENTORY PUSH ─────────────────────────────────────────────────
-let physicalPushStatus = null; // tracks current/last run
-
-async function runPhysicalPush(dryRun) {
-  const XLSX = require('xlsx');
-  const wb = XLSX.readFile(path.join(__dirname, 'newinvupdate.xlsx'));
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
-
-  const items = [];
-  for (const row of rows) {
-    const name = row[0];
-    const qty = row[2];
-    if (!name || typeof name !== 'string') continue;
-    if (name === 'Product/Service' || name === 'Physical Inventory Worksheet') continue;
-    const resolvedQty = (qty === null || qty === undefined || qty === '') ? 0 : qty;
-    if (typeof resolvedQty !== 'number') continue;
-    items.push({ name: name.trim(), qty: resolvedQty });
-  }
-
-  physicalPushStatus = { running: true, dryRun, total: items.length, done: 0, updated: [], skipped: [], errors: [], startedAt: new Date().toISOString() };
-
-  for (const { name, qty } of items) {
-    try {
-      const encoded = encodeURIComponent(`SELECT * FROM Item WHERE Name = '${name.replace(/'/g, "\\'")}'`);
-      const data = await qboGet('company1', `query?query=${encoded}`);
-      const item = data.QueryResponse?.Item?.[0];
-
-      if (!item) { physicalPushStatus.skipped.push({ name, reason: 'Not found in QBO' }); }
-      else if (item.Type !== 'Inventory') { physicalPushStatus.skipped.push({ name, reason: `Non-inventory: ${item.Type}` }); }
-      else {
-        const currentQty = item.QtyOnHand;
-        if (!dryRun) {
-          const result = await updateInventory(item.Id, qty, item.SyncToken, 'company1');
-          if (result.Item) physicalPushStatus.updated.push({ name, from: currentQty, to: qty });
-          else physicalPushStatus.errors.push({ name, error: JSON.stringify(result.Fault || result) });
-        } else {
-          physicalPushStatus.updated.push({ name, from: currentQty, to: qty, dryRun: true });
-        }
-      }
-      await new Promise(r => setTimeout(r, 150));
-    } catch (err) {
-      physicalPushStatus.errors.push({ name, error: err.message });
-    }
-    physicalPushStatus.done++;
-  }
-  physicalPushStatus.running = false;
-  physicalPushStatus.finishedAt = new Date().toISOString();
-  log('success', `Physical inventory push complete — ${physicalPushStatus.updated.length} updated, ${physicalPushStatus.skipped.length} skipped, ${physicalPushStatus.errors.length} errors`, { dryRun });
-}
-
-// Start a push (dry run by default)
-app.get('/api/push-physical-inventory', (req, res) => {
-  const dryRun = req.query.dry !== 'false';
-  if (physicalPushStatus?.running) return res.json({ message: 'Already running', status: physicalPushStatus });
-  runPhysicalPush(dryRun).catch(err => {
-    if (physicalPushStatus) { physicalPushStatus.running = false; physicalPushStatus.fatalError = err.message; }
-  });
-  res.json({ message: dryRun ? 'Dry run started' : 'Push started', dryRun, note: 'Poll /api/push-physical-inventory/status to track progress' });
-});
-
-// Check status / results
-app.get('/api/push-physical-inventory/status', (req, res) => {
-  if (!physicalPushStatus) return res.json({ message: 'No push has been run yet' });
-  res.json(physicalPushStatus);
-});
-
 app.post('/api/disconnect/:companyKey', (req, res) => {
   const { companyKey } = req.params;
   if (appData.companies[companyKey]) {
@@ -1254,11 +1216,181 @@ app.post('/api/disconnect/:companyKey', (req, res) => {
   res.json({ success: true });
 });
 
+// ─── PROCLEAN INVENTORY TRACKING ─────────────────────────────────────────────
+
+async function pcUpsertItem(item) {
+  await pool.query(`
+    INSERT INTO proclean_items (qbo_id, sync_token, name, sku, uom, qty_on_hand, item_type, last_synced, last_updated_by)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),'qbo')
+    ON CONFLICT (qbo_id) DO UPDATE SET
+      sync_token = $2, name = $3, sku = $4, uom = $5,
+      qty_on_hand = $6, item_type = $7, last_synced = NOW(), last_updated_by = 'qbo'
+  `, [item.Id, item.SyncToken, item.Name, item.Sku||'', item.UnitOfMeasureSetRef?.value||'EACH', item.QtyOnHand||0, item.Type]);
+}
+
+async function pcLogMovement(qboId, itemName, quantity, movementType, source, note) {
+  await pool.query(
+    'INSERT INTO proclean_movements (qbo_id, item_name, quantity, movement_type, source, note) VALUES ($1,$2,$3,$4,$5,$6)',
+    [qboId, itemName, quantity, movementType, source||null, note||null]
+  );
+}
+
+async function syncProCleanItemsFromQBO() {
+  if (!appData.companies['company1']?.tokens) return;
+  try {
+    let startPos = 1;
+    while (true) {
+      const encoded = encodeURIComponent('SELECT * FROM Item WHERE Type = \'Inventory\' STARTPOSITION ' + startPos + ' MAXRESULTS 100');
+      const data = await qboGet('company1', 'query?query=' + encoded);
+      const items = data.QueryResponse?.Item || [];
+      if (items.length === 0) break;
+      for (const item of items) await pcUpsertItem(item);
+      if (items.length < 100) break;
+      startPos += 100;
+    }
+    console.log('[ProClean] QBO sync complete');
+  } catch (err) {
+    console.error('[ProClean Sync] Poll error:', err.message);
+  }
+}
+
+function startProCleanPoller() {
+  setTimeout(() => {
+    syncProCleanItemsFromQBO();
+    setInterval(syncProCleanItemsFromQBO, 5 * 60 * 1000);
+  }, 10000);
+}
+
+// GET all items
+app.get('/api/proclean/items', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM proclean_items ORDER BY name ASC');
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET single item
+app.get('/api/proclean/items/:qboId', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM proclean_items WHERE qbo_id = $1', [req.params.qboId]);
+    if (!result.rows.length) return res.status(404).json({ error: 'Item not found' });
+    res.json(result.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET movements for item
+app.get('/api/proclean/items/:qboId/movements', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM proclean_movements WHERE qbo_id = $1 ORDER BY created_at DESC LIMIT 50',
+      [req.params.qboId]
+    );
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET recent movements
+app.get('/api/proclean/movements/recent', async (req, res) => {
+  const limit = parseInt(req.query.limit) || 20;
+  try {
+    const result = await pool.query('SELECT * FROM proclean_movements ORDER BY created_at DESC LIMIT $1', [limit]);
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET stats
+app.get('/api/proclean/stats', async (req, res) => {
+  try {
+    const result = await pool.query("SELECT qty_on_hand FROM proclean_items WHERE item_type = 'Inventory'");
+    const total = result.rows.length;
+    const out = result.rows.filter(r => parseFloat(r.qty_on_hand) === 0).length;
+    const negative = result.rows.filter(r => parseFloat(r.qty_on_hand) < 0).length;
+    const ok = total - out - negative;
+    res.json({ total, ok, out_of_stock: out, negative });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PATCH item (qty and/or name) → writes to QBO
+app.patch('/api/proclean/items/:qboId', async (req, res) => {
+  const { qty_on_hand, name, note } = req.body;
+  try {
+    const dbResult = await pool.query('SELECT * FROM proclean_items WHERE qbo_id = $1', [req.params.qboId]);
+    if (!dbResult.rows.length) return res.status(404).json({ error: 'Item not found' });
+    const item = dbResult.rows[0];
+
+    const newQty = qty_on_hand !== undefined ? qty_on_hand : parseFloat(item.qty_on_hand);
+    const qboResult = await updateInventory(item.qbo_id, newQty, item.sync_token, 'company1');
+    if (qboResult.Fault) return res.status(400).json({ error: JSON.stringify(qboResult.Fault) });
+
+    const updatedItem = qboResult.Item;
+    const updatedName = name !== undefined ? name : item.name;
+
+    await pool.query(
+      'UPDATE proclean_items SET qty_on_hand=$1, sync_token=$2, name=$3, last_synced=NOW(), last_updated_by=$4 WHERE qbo_id=$5',
+      [updatedItem.QtyOnHand, updatedItem.SyncToken, updatedName, 'website', item.qbo_id]
+    );
+
+    if (qty_on_hand !== undefined && parseFloat(qty_on_hand) !== parseFloat(item.qty_on_hand)) {
+      const delta = parseFloat(qty_on_hand) - parseFloat(item.qty_on_hand);
+      await pcLogMovement(item.qbo_id, item.name, Math.abs(delta), delta > 0 ? 'restock' : 'deduction', 'website_edit', note || 'Manual inventory edit');
+    }
+
+    const fresh = await pool.query('SELECT * FROM proclean_items WHERE qbo_id = $1', [item.qbo_id]);
+    res.json(fresh.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST log movement → writes to QBO
+app.post('/api/proclean/items/:qboId/movements', async (req, res) => {
+  const { quantity, movement_type, note } = req.body;
+  if (!quantity || !movement_type) return res.status(400).json({ error: 'quantity and movement_type required' });
+  try {
+    const dbResult = await pool.query('SELECT * FROM proclean_items WHERE qbo_id = $1', [req.params.qboId]);
+    if (!dbResult.rows.length) return res.status(404).json({ error: 'Item not found' });
+    const item = dbResult.rows[0];
+
+    const currentQty = parseFloat(item.qty_on_hand);
+    const newQty = movement_type === 'deduction' ? currentQty - parseFloat(quantity) : currentQty + parseFloat(quantity);
+
+    const qboResult = await updateInventory(item.qbo_id, newQty, item.sync_token, 'company1');
+    if (qboResult.Fault) return res.status(400).json({ error: JSON.stringify(qboResult.Fault) });
+
+    const updatedItem = qboResult.Item;
+    await pool.query(
+      'UPDATE proclean_items SET qty_on_hand=$1, sync_token=$2, last_synced=NOW(), last_updated_by=$3 WHERE qbo_id=$4',
+      [updatedItem.QtyOnHand, updatedItem.SyncToken, 'website', item.qbo_id]
+    );
+
+    await pcLogMovement(item.qbo_id, item.name, parseFloat(quantity), movement_type, 'website', note || null);
+    const movement = await pool.query('SELECT * FROM proclean_movements WHERE qbo_id = $1 ORDER BY created_at DESC LIMIT 1', [item.qbo_id]);
+    res.json(movement.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST force sync from QBO
+app.post('/api/proclean/sync', async (req, res) => {
+  try {
+    await syncProCleanItemsFromQBO();
+    const result = await pool.query('SELECT COUNT(*) FROM proclean_items');
+    res.json({ success: true, itemCount: parseInt(result.rows[0].count) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Serve ProClean UI
+app.get('/proclean', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'proclean.html'));
+});
+
+app.get('/proclean/*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'proclean.html'));
+});
+
 // ─── START ────────────────────────────────────────────────────────────────────
 initDb()
   .then(() => loadData())
   .then(data => {
     appData = data;
+    startProCleanPoller();
     app.listen(CONFIG.port, () => {
       console.log(`\n🚀 QBO Inventory Sync running on port ${CONFIG.port}`);
       console.log(`   Dashboard: http://localhost:${CONFIG.port}`);
