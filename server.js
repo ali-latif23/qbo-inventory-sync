@@ -48,12 +48,14 @@ async function initDb() {
       uom TEXT,
       qty_on_hand NUMERIC NOT NULL DEFAULT 0,
       unit_price NUMERIC NOT NULL DEFAULT 0,
+      purchase_cost NUMERIC NOT NULL DEFAULT 0,
       item_type TEXT DEFAULT 'Inventory',
       last_synced TIMESTAMPTZ DEFAULT NOW(),
       last_updated_by TEXT DEFAULT 'qbo'
     );
-    -- Add unit_price if table already exists (safe migration)
+    -- Add columns if table already exists (safe migration)
     ALTER TABLE proclean_items ADD COLUMN IF NOT EXISTS unit_price NUMERIC NOT NULL DEFAULT 0;
+    ALTER TABLE proclean_items ADD COLUMN IF NOT EXISTS purchase_cost NUMERIC NOT NULL DEFAULT 0;
     CREATE TABLE IF NOT EXISTS proclean_movements (
       id SERIAL PRIMARY KEY,
       qbo_id TEXT NOT NULL REFERENCES proclean_items(qbo_id) ON DELETE CASCADE,
@@ -1223,12 +1225,12 @@ app.post('/api/disconnect/:companyKey', (req, res) => {
 
 async function pcUpsertItem(item) {
   await pool.query(`
-    INSERT INTO proclean_items (qbo_id, sync_token, name, sku, uom, qty_on_hand, unit_price, item_type, last_synced, last_updated_by)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),'qbo')
+    INSERT INTO proclean_items (qbo_id, sync_token, name, sku, uom, qty_on_hand, unit_price, purchase_cost, item_type, last_synced, last_updated_by)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),'qbo')
     ON CONFLICT (qbo_id) DO UPDATE SET
       sync_token = $2, name = $3, sku = $4, uom = $5,
-      qty_on_hand = $6, unit_price = $7, item_type = $8, last_synced = NOW(), last_updated_by = 'qbo'
-  `, [item.Id, item.SyncToken, item.Name, item.Sku||'', item.UnitOfMeasureSetRef?.value||'EACH', item.QtyOnHand||0, item.UnitPrice||0, item.Type]);
+      qty_on_hand = $6, unit_price = $7, purchase_cost = $8, item_type = $9, last_synced = NOW(), last_updated_by = 'qbo'
+  `, [item.Id, item.SyncToken, item.Name, item.Sku||'', item.UnitOfMeasureSetRef?.value||'EACH', item.QtyOnHand||0, item.UnitPrice||0, item.PurchaseCost||0, item.Type]);
 }
 
 async function pcLogMovement(qboId, itemName, quantity, movementType, source, note) {
@@ -1319,13 +1321,14 @@ app.get('/api/proclean/movements/recent', async (req, res) => {
 // GET stats
 app.get('/api/proclean/stats', async (req, res) => {
   try {
-    const result = await pool.query("SELECT qty_on_hand, unit_price FROM proclean_items WHERE item_type = 'Inventory'");
+    const result = await pool.query("SELECT qty_on_hand, unit_price, purchase_cost FROM proclean_items WHERE item_type = 'Inventory'");
     const total = result.rows.length;
     const out = result.rows.filter(r => parseFloat(r.qty_on_hand) === 0).length;
     const negative = result.rows.filter(r => parseFloat(r.qty_on_hand) < 0).length;
     const ok = total - out - negative;
     const totalValue = result.rows.reduce((sum, r) => sum + (parseFloat(r.qty_on_hand) * parseFloat(r.unit_price)), 0);
-    res.json({ total, ok, out_of_stock: out, negative, total_value: totalValue });
+    const totalCostValue = result.rows.reduce((sum, r) => sum + (parseFloat(r.qty_on_hand) * parseFloat(r.purchase_cost)), 0);
+    res.json({ total, ok, out_of_stock: out, negative, total_value: totalValue, total_cost_value: totalCostValue });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1384,6 +1387,108 @@ app.post('/api/proclean/items/:qboId/movements', async (req, res) => {
     await pcLogMovement(item.qbo_id, item.name, parseFloat(quantity), movement_type, 'website', note || null);
     const movement = await pool.query('SELECT * FROM proclean_movements WHERE qbo_id = $1 ORDER BY created_at DESC LIMIT 1', [item.qbo_id]);
     res.json(movement.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PATCH sale price → writes to QBO
+app.patch('/api/proclean/items/:qboId/price', async (req, res) => {
+  const { unit_price } = req.body;
+  if (unit_price === undefined || isNaN(parseFloat(unit_price))) return res.status(400).json({ error: 'unit_price required' });
+  try {
+    const dbResult = await pool.query('SELECT * FROM proclean_items WHERE qbo_id = $1', [req.params.qboId]);
+    if (!dbResult.rows.length) return res.status(404).json({ error: 'Item not found' });
+    const item = dbResult.rows[0];
+
+    // Fetch full item from QBO to get all required fields for update
+    const qboData = await qboGet('company1', 'item/' + item.qbo_id);
+    if (!qboData.Item) return res.status(400).json({ error: 'Could not fetch item from QBO' });
+    const qboItem = qboData.Item;
+
+    // POST full item back with updated price
+    const company = appData.companies['company1'];
+    const token = await getAccessToken('company1');
+    const url = `${QBO_BASE}/${company.realmId}/item`;
+    const body = { ...qboItem, UnitPrice: parseFloat(unit_price), SyncToken: qboItem.SyncToken };
+    const res2 = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const result = await res2.json();
+    if (result.Fault) return res.status(400).json({ error: JSON.stringify(result.Fault) });
+
+    // Update DB
+    await pool.query(
+      'UPDATE proclean_items SET unit_price=$1, sync_token=$2, last_synced=NOW(), last_updated_by=$3 WHERE qbo_id=$4',
+      [parseFloat(unit_price), result.Item.SyncToken, 'website', item.qbo_id]
+    );
+
+    const fresh = await pool.query('SELECT * FROM proclean_items WHERE qbo_id = $1', [item.qbo_id]);
+    res.json(fresh.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PATCH cost price → writes to QBO
+app.patch('/api/proclean/items/:qboId/cost', async (req, res) => {
+  const { purchase_cost } = req.body;
+  if (purchase_cost === undefined || isNaN(parseFloat(purchase_cost))) return res.status(400).json({ error: 'purchase_cost required' });
+  try {
+    const dbResult = await pool.query('SELECT * FROM proclean_items WHERE qbo_id = $1', [req.params.qboId]);
+    if (!dbResult.rows.length) return res.status(404).json({ error: 'Item not found' });
+    const item = dbResult.rows[0];
+
+    const qboData = await qboGet('company1', 'item/' + item.qbo_id);
+    if (!qboData.Item) return res.status(400).json({ error: 'Could not fetch item from QBO' });
+    const qboItem = qboData.Item;
+
+    const company = appData.companies['company1'];
+    const token = await getAccessToken('company1');
+    const url = `${QBO_BASE}/${company.realmId}/item`;
+    const body = { ...qboItem, PurchaseCost: parseFloat(purchase_cost), SyncToken: qboItem.SyncToken };
+    const res2 = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const result = await res2.json();
+    if (result.Fault) return res.status(400).json({ error: JSON.stringify(result.Fault) });
+
+    await pool.query(
+      'UPDATE proclean_items SET purchase_cost=$1, sync_token=$2, last_synced=NOW(), last_updated_by=$3 WHERE qbo_id=$4',
+      [parseFloat(purchase_cost), result.Item.SyncToken, 'website', item.qbo_id]
+    );
+
+    const fresh = await pool.query('SELECT * FROM proclean_items WHERE qbo_id = $1', [item.qbo_id]);
+    res.json(fresh.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST make item inactive in QBO → removes from website
+app.post('/api/proclean/items/:qboId/deactivate', async (req, res) => {
+  try {
+    const dbResult = await pool.query('SELECT * FROM proclean_items WHERE qbo_id = $1', [req.params.qboId]);
+    if (!dbResult.rows.length) return res.status(404).json({ error: 'Item not found' });
+    const item = dbResult.rows[0];
+
+    // Fetch full item from QBO
+    const qboData = await qboGet('company1', 'item/' + item.qbo_id);
+    if (!qboData.Item) return res.status(400).json({ error: 'Could not fetch item from QBO' });
+    const qboItem = qboData.Item;
+
+    const company = appData.companies['company1'];
+    const token = await getAccessToken('company1');
+    const url = `${QBO_BASE}/${company.realmId}/item`;
+    const result = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ ...qboItem, Active: false, SyncToken: qboItem.SyncToken })
+    });
+    const data = await result.json();
+    if (data.Fault) return res.status(400).json({ error: JSON.stringify(data.Fault) });
+
+    // Remove from our DB
+    await pool.query('DELETE FROM proclean_items WHERE qbo_id = $1', [item.qbo_id]);
+    res.json({ success: true, name: item.name });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
