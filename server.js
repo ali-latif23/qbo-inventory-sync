@@ -47,10 +47,13 @@ async function initDb() {
       sku TEXT,
       uom TEXT,
       qty_on_hand NUMERIC NOT NULL DEFAULT 0,
+      unit_price NUMERIC NOT NULL DEFAULT 0,
       item_type TEXT DEFAULT 'Inventory',
       last_synced TIMESTAMPTZ DEFAULT NOW(),
       last_updated_by TEXT DEFAULT 'qbo'
     );
+    -- Add unit_price if table already exists (safe migration)
+    ALTER TABLE proclean_items ADD COLUMN IF NOT EXISTS unit_price NUMERIC NOT NULL DEFAULT 0;
     CREATE TABLE IF NOT EXISTS proclean_movements (
       id SERIAL PRIMARY KEY,
       qbo_id TEXT NOT NULL REFERENCES proclean_items(qbo_id) ON DELETE CASCADE,
@@ -1220,12 +1223,12 @@ app.post('/api/disconnect/:companyKey', (req, res) => {
 
 async function pcUpsertItem(item) {
   await pool.query(`
-    INSERT INTO proclean_items (qbo_id, sync_token, name, sku, uom, qty_on_hand, item_type, last_synced, last_updated_by)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),'qbo')
+    INSERT INTO proclean_items (qbo_id, sync_token, name, sku, uom, qty_on_hand, unit_price, item_type, last_synced, last_updated_by)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),'qbo')
     ON CONFLICT (qbo_id) DO UPDATE SET
       sync_token = $2, name = $3, sku = $4, uom = $5,
-      qty_on_hand = $6, item_type = $7, last_synced = NOW(), last_updated_by = 'qbo'
-  `, [item.Id, item.SyncToken, item.Name, item.Sku||'', item.UnitOfMeasureSetRef?.value||'EACH', item.QtyOnHand||0, item.Type]);
+      qty_on_hand = $6, unit_price = $7, item_type = $8, last_synced = NOW(), last_updated_by = 'qbo'
+  `, [item.Id, item.SyncToken, item.Name, item.Sku||'', item.UnitOfMeasureSetRef?.value||'EACH', item.QtyOnHand||0, item.UnitPrice||0, item.Type]);
 }
 
 async function pcLogMovement(qboId, itemName, quantity, movementType, source, note) {
@@ -1316,12 +1319,13 @@ app.get('/api/proclean/movements/recent', async (req, res) => {
 // GET stats
 app.get('/api/proclean/stats', async (req, res) => {
   try {
-    const result = await pool.query("SELECT qty_on_hand FROM proclean_items WHERE item_type = 'Inventory'");
+    const result = await pool.query("SELECT qty_on_hand, unit_price FROM proclean_items WHERE item_type = 'Inventory'");
     const total = result.rows.length;
     const out = result.rows.filter(r => parseFloat(r.qty_on_hand) === 0).length;
     const negative = result.rows.filter(r => parseFloat(r.qty_on_hand) < 0).length;
     const ok = total - out - negative;
-    res.json({ total, ok, out_of_stock: out, negative });
+    const totalValue = result.rows.reduce((sum, r) => sum + (parseFloat(r.qty_on_hand) * parseFloat(r.unit_price)), 0);
+    res.json({ total, ok, out_of_stock: out, negative, total_value: totalValue });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
