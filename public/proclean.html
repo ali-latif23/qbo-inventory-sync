@@ -384,7 +384,7 @@
           <p class="page-sub" id="dash-sub">ProClean — live stock overview</p>
         </div>
       </div>
-      <div class="stat-grid">
+      <div class="stat-grid" style="grid-template-columns: repeat(5, 1fr)">
         <div class="stat-card" style="--c: var(--blue)">
           <div class="stat-label">Total SKUs</div>
           <div class="stat-value" id="stat-total">—</div>
@@ -400,6 +400,10 @@
         <div class="stat-card" style="--c: var(--red)">
           <div class="stat-label">Negative</div>
           <div class="stat-value" id="stat-neg">—</div>
+        </div>
+        <div class="stat-card" style="--c: var(--purple)">
+          <div class="stat-label">Total Value</div>
+          <div class="stat-value" id="stat-value" style="font-size:20px">—</div>
         </div>
       </div>
       <div class="dash-grid">
@@ -438,8 +442,8 @@
         </div>
       </div>
       <div class="inv-table">
-        <div class="inv-thead">
-          <div>Item</div><div>UOM</div><div>Quantity</div><div>Status</div><div></div>
+        <div class="inv-thead" style="grid-template-columns: 2fr 1fr 110px 110px 110px 110px 36px">
+          <div>Item</div><div>UOM</div><div>Quantity</div><div>Sale Price</div><div>Value</div><div>Status</div><div></div>
         </div>
         <div id="inv-body"><div class="loading"><div class="spinner"></div> Loading…</div></div>
       </div>
@@ -597,6 +601,7 @@ async function loadDashboard() {
     document.getElementById('stat-ok').textContent = stats.ok;
     document.getElementById('stat-zero').textContent = stats.out_of_stock;
     document.getElementById('stat-neg').textContent = stats.negative;
+    document.getElementById('stat-value').textContent = '$' + (stats.total_value || 0).toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:0});
     document.getElementById('dash-sub').textContent = `ProClean — ${stats.total} SKUs tracked`;
 
     // Alert list — zero + negative
@@ -669,18 +674,23 @@ function renderInventory() {
 
   document.getElementById('inv-body').innerHTML = filtered.map(i => {
     const qty = parseFloat(i.qty_on_hand);
+    const price = parseFloat(i.unit_price) || 0;
+    const value = qty * price;
     const status = getStatus(qty);
     const qtyClass = status === 'neg' ? 'qty-negative' : status === 'zero' ? 'qty-zero' : 'qty-ok';
+    const valueClass = value < 0 ? 'qty-negative' : value > 0 ? 'qty-ok' : '';
     const statusBadge = status === 'ok' ? `<span class="status-badge status-ok">● In Stock</span>`
       : status === 'neg' ? `<span class="status-badge status-neg">● Negative</span>`
       : `<span class="status-badge status-zero">● Zero</span>`;
-    return `<div class="inv-row" onclick="openDetail('${i.qbo_id}')">
+    return `<div class="inv-row" style="grid-template-columns: 2fr 1fr 110px 110px 110px 110px 36px" onclick="openDetail('${i.qbo_id}')">
       <div class="inv-name-col">
         <span class="inv-name">${i.name}</span>
         ${i.sku ? `<span class="inv-sku">${i.sku}</span>` : ''}
       </div>
       <div class="inv-uom">${i.uom || '—'}</div>
-      <div class="inv-qty ${qtyClass}" id="qty-${i.qbo_id}">${qty}</div>
+      <div class="inv-qty ${qtyClass}">${qty}</div>
+      <div class="inv-qty" style="color:var(--text2)">${price > 0 ? '$' + price.toFixed(2) : '—'}</div>
+      <div class="inv-qty ${valueClass}">${price > 0 ? '$' + value.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—'}</div>
       <div class="inv-status">${statusBadge}</div>
       <div class="row-arrow"><svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg></div>
     </div>`;
@@ -723,7 +733,10 @@ function renderDetail(item) {
   document.getElementById('detail-qty').textContent = qty;
   document.getElementById('detail-qty').className = 'big-stock ' + qtyClass;
   document.getElementById('detail-uom').textContent = item.uom || '';
-  document.getElementById('detail-meta').textContent = 'Last synced: ' + fmtDate(item.last_synced) + ' · ' + (item.last_updated_by || '');
+  const price = parseFloat(item.unit_price) || 0;
+  const value = parseFloat(item.qty_on_hand) * price;
+  const priceStr = price > 0 ? ' · Sale Price: $' + price.toFixed(2) + ' · Value: $' + value.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) : '';
+  document.getElementById('detail-meta').textContent = 'Last synced: ' + fmtDate(item.last_synced) + ' · ' + (item.last_updated_by || '') + priceStr;
   document.getElementById('edit-name').value = item.name;
   document.getElementById('edit-qty').value = qty;
 }
