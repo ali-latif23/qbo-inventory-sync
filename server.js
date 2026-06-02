@@ -1510,6 +1510,11 @@ app.get('/proclean/*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'proclean.html'));
 });
 
+// Serve Production Dashboard (read-only, Pakistan team)
+app.get('/production', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'production.html'));
+});
+
 // ─── START ────────────────────────────────────────────────────────────────────
 initDb()
   .then(() => loadData())
