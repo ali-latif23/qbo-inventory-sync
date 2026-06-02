@@ -4,6 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ProClean Inventory</title>
+  <link rel="manifest" href="/manifest-proclean.json" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="ProClean" />
+  <meta name="theme-color" content="#2c5282" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
@@ -441,6 +447,10 @@
           <h1 class="page-title">Inventory</h1>
           <p class="page-sub" id="inv-sub">Loading…</p>
         </div>
+        <a href="/api/proclean/export" download class="btn-primary" style="text-decoration:none">
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          Export to Excel
+        </a>
       </div>
       <div class="toolbar">
         <div class="search-wrap">
