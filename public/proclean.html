@@ -536,7 +536,7 @@
         </div>
         <div class="form-group">
           <label class="form-label">Sales Description</label>
-          <textarea class="form-input" id="edit-description" placeholder="Sales description (updates all companies)…" rows="3" style="resize:vertical;line-height:1.5"></textarea>
+          <textarea class="form-input" id="edit-description" placeholder="Sales description (updates all companies)…" rows="3" style="resize:vertical;line-height:1.5" oninput="onDescInput()"></textarea>
         </div>
         <div class="form-group">
           <label class="form-label">Note (optional)</label>
@@ -544,6 +544,7 @@
         </div>
         <div id="edit-error" class="form-error" style="display:none"></div>
         <div id="name-check-result" style="display:none;padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:8px;border:1px solid var(--border);background:var(--surface2)"></div>
+        <div id="desc-check-result" style="display:none;padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:8px;border:1px solid var(--border);background:var(--surface2)"></div>
         <div class="edit-actions" style="justify-content: space-between">
           <button class="btn-danger" onclick="deactivateItem()">Make Inactive in QBO</button>
           <div style="display:flex;gap:10px">
@@ -861,6 +862,41 @@ async function onNameInput() {
   }, 600);
 }
 
+let descCheckTimer = null;
+
+async function onDescInput() {
+  const desc = document.getElementById('edit-description').value.trim();
+  const resultEl = document.getElementById('desc-check-result');
+  if (!currentItem) return;
+  clearTimeout(descCheckTimer);
+  descCheckTimer = setTimeout(async () => {
+    resultEl.style.display = 'block';
+    resultEl.style.background = 'var(--surface2)';
+    resultEl.style.color = 'var(--text2)';
+    resultEl.style.borderColor = 'var(--border)';
+    resultEl.textContent = 'Checking other companies…';
+    try {
+      const data = await apiFetch('/api/proclean/items/' + currentItem.qbo_id + '/name-check?name=' + encodeURIComponent(currentItem.name));
+      const found = data.matches.filter(m => m.found);
+      if (found.length === 0) {
+        resultEl.textContent = '📋 Description: No matches outside ProClean — will only update ProClean';
+        resultEl.style.background = 'var(--surface2)';
+        resultEl.style.color = 'var(--text2)';
+        resultEl.style.borderColor = 'var(--border)';
+      } else {
+        const names = found.map(m => m.company).join(' and ');
+        resultEl.textContent = '✓ Description: Also found in ' + names + ' — will update all matching companies';
+        resultEl.style.background = 'var(--green-dim)';
+        resultEl.style.color = 'var(--green)';
+        resultEl.style.borderColor = 'rgba(56,161,105,0.3)';
+      }
+    } catch(e) {
+      resultEl.textContent = 'Could not check other companies — will update ProClean only';
+      resultEl.style.color = 'var(--text3)';
+    }
+  }, 600);
+}
+
 async function saveEdit() {
   if (!currentItem) return;
   const name = document.getElementById('edit-name').value.trim();
@@ -899,6 +935,7 @@ async function saveEdit() {
     const movements = await apiFetch('/api/proclean/items/' + currentItem.qbo_id + '/movements');
     renderMovLog(movements, updated);
     document.getElementById('name-check-result').style.display = 'none';
+    document.getElementById('desc-check-result').style.display = 'none';
     nameCheckData = null;
     toggleEdit();
     allItems = allItems.map(i => i.qbo_id === updated.qbo_id ? updated : i);
