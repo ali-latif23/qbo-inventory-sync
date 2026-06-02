@@ -49,6 +49,7 @@ async function initDb() {
       qty_on_hand NUMERIC NOT NULL DEFAULT 0,
       unit_price NUMERIC NOT NULL DEFAULT 0,
       purchase_cost NUMERIC NOT NULL DEFAULT 0,
+      description TEXT,
       item_type TEXT DEFAULT 'Inventory',
       last_synced TIMESTAMPTZ DEFAULT NOW(),
       last_updated_by TEXT DEFAULT 'qbo'
@@ -56,6 +57,7 @@ async function initDb() {
     -- Add columns if table already exists (safe migration)
     ALTER TABLE proclean_items ADD COLUMN IF NOT EXISTS unit_price NUMERIC NOT NULL DEFAULT 0;
     ALTER TABLE proclean_items ADD COLUMN IF NOT EXISTS purchase_cost NUMERIC NOT NULL DEFAULT 0;
+    ALTER TABLE proclean_items ADD COLUMN IF NOT EXISTS description TEXT;
     CREATE TABLE IF NOT EXISTS proclean_movements (
       id SERIAL PRIMARY KEY,
       qbo_id TEXT NOT NULL REFERENCES proclean_items(qbo_id) ON DELETE CASCADE,
@@ -1225,12 +1227,12 @@ app.post('/api/disconnect/:companyKey', (req, res) => {
 
 async function pcUpsertItem(item) {
   await pool.query(`
-    INSERT INTO proclean_items (qbo_id, sync_token, name, sku, uom, qty_on_hand, unit_price, purchase_cost, item_type, last_synced, last_updated_by)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),'qbo')
+    INSERT INTO proclean_items (qbo_id, sync_token, name, sku, uom, qty_on_hand, unit_price, purchase_cost, description, item_type, last_synced, last_updated_by)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),'qbo')
     ON CONFLICT (qbo_id) DO UPDATE SET
       sync_token = $2, name = $3, sku = $4, uom = $5,
-      qty_on_hand = $6, unit_price = $7, purchase_cost = $8, item_type = $9, last_synced = NOW(), last_updated_by = 'qbo'
-  `, [item.Id, item.SyncToken, item.Name, item.Sku||'', item.UnitOfMeasureSetRef?.value||'EACH', item.QtyOnHand||0, item.UnitPrice||0, item.PurchaseCost||0, item.Type]);
+      qty_on_hand = $6, unit_price = $7, purchase_cost = $8, description = $9, item_type = $10, last_synced = NOW(), last_updated_by = 'qbo'
+  `, [item.Id, item.SyncToken, item.Name, item.Sku||'', item.UnitOfMeasureSetRef?.value||'EACH', item.QtyOnHand||0, item.UnitPrice||0, item.PurchaseCost||0, item.Description||null, item.Type]);
 }
 
 async function pcLogMovement(qboId, itemName, quantity, movementType, source, note) {
@@ -1356,7 +1358,7 @@ app.get('/api/proclean/items/:qboId/name-check', async (req, res) => {
 
 // PATCH item (qty, name, uom) → writes to QBO (name update checks all 3 companies)
 app.patch('/api/proclean/items/:qboId', async (req, res) => {
-  const { qty_on_hand, name, uom, note } = req.body;
+  const { qty_on_hand, name, uom, note, description } = req.body;
   try {
     const dbResult = await pool.query('SELECT * FROM proclean_items WHERE qbo_id = $1', [req.params.qboId]);
     if (!dbResult.rows.length) return res.status(404).json({ error: 'Item not found' });
@@ -1372,16 +1374,19 @@ app.patch('/api/proclean/items/:qboId', async (req, res) => {
 
     // If name changed, update ProClean name in QBO and check Linen Pros + Brown Eyed Girl
     const nameChanged = name !== undefined && name !== item.name;
-    if (nameChanged) {
-      // Update name in ProClean QBO
+    const descChanged = description !== undefined && description !== item.description;
+    if (nameChanged || descChanged) {
+      // Update name and description in ProClean QBO
       const company1 = appData.companies['company1'];
       const token1 = await getAccessToken('company1');
       const qboItemData = await qboGet('company1', 'item/' + item.qbo_id);
       if (qboItemData.Item) {
+        const updateBody = { ...qboItemData.Item, Name: updatedName, SyncToken: qboItemData.Item.SyncToken };
+        if (description !== undefined) updateBody.Description = description;
         await fetch(`${QBO_BASE}/${company1.realmId}/item`, {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + token1, 'Content-Type': 'application/json', 'Accept': 'application/json' },
-          body: JSON.stringify({ ...qboItemData.Item, Name: updatedName, SyncToken: qboItemData.Item.SyncToken })
+          body: JSON.stringify(updateBody)
         });
       }
 
@@ -1399,12 +1404,14 @@ app.patch('/api/proclean/items/:qboId', async (req, res) => {
             nameUpdates.push({ company: company.name, found: false });
             continue;
           }
-          // Update name in this company
+          // Update name and description in this company
           const token = await getAccessToken(companyKey);
+          const updateBody = { ...foundItem, Name: updatedName, SyncToken: foundItem.SyncToken };
+          if (description !== undefined) updateBody.Description = description;
           const updateRes = await fetch(`${QBO_BASE}/${company.realmId}/item`, {
             method: 'POST',
             headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json', 'Accept': 'application/json' },
-            body: JSON.stringify({ ...foundItem, Name: updatedName, SyncToken: foundItem.SyncToken })
+            body: JSON.stringify(updateBody)
           });
           const updateData = await updateRes.json();
           if (updateData.Item) {
@@ -1419,9 +1426,10 @@ app.patch('/api/proclean/items/:qboId', async (req, res) => {
       console.log('[Name Update] Results:', JSON.stringify(nameUpdates));
     }
 
+    const updatedDesc = description !== undefined ? description : item.description;
     await pool.query(
-      'UPDATE proclean_items SET qty_on_hand=$1, sync_token=$2, name=$3, uom=$4, last_synced=NOW(), last_updated_by=$5 WHERE qbo_id=$6',
-      [updatedItem.QtyOnHand, updatedItem.SyncToken, updatedName, updatedUom, 'website', item.qbo_id]
+      'UPDATE proclean_items SET qty_on_hand=$1, sync_token=$2, name=$3, uom=$4, description=$5, last_synced=NOW(), last_updated_by=$6 WHERE qbo_id=$7',
+      [updatedItem.QtyOnHand, updatedItem.SyncToken, updatedName, updatedUom, updatedDesc, 'website', item.qbo_id]
     );
 
     if (qty_on_hand !== undefined && parseFloat(qty_on_hand) !== parseFloat(item.qty_on_hand)) {
