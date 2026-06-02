@@ -535,6 +535,10 @@
           </div>
         </div>
         <div class="form-group">
+          <label class="form-label">Sales Description</label>
+          <textarea class="form-input" id="edit-description" placeholder="Sales description (updates all companies)…" rows="3" style="resize:vertical;line-height:1.5"></textarea>
+        </div>
+        <div class="form-group">
           <label class="form-label">Note (optional)</label>
           <input class="form-input" id="edit-note" placeholder="Reason for adjustment…" />
         </div>
@@ -778,7 +782,8 @@ function renderDetail(item) {
   const value = parseFloat(item.qty_on_hand) * price;
   const costValue = parseFloat(item.qty_on_hand) * cost;
   const priceStr = price > 0 ? ' · Sale: $' + price.toFixed(2) + ' · Cost: $' + cost.toFixed(2) + ' · Value: $' + value.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' · Cost Value: $' + costValue.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) : '';
-  document.getElementById('detail-meta').textContent = 'Last synced: ' + fmtDate(item.last_synced) + ' · ' + (item.last_updated_by || '') + priceStr;
+  const descStr = item.description ? ' · ' + item.description : '';
+  document.getElementById('detail-meta').textContent = 'Last synced: ' + fmtDate(item.last_synced) + ' · ' + (item.last_updated_by || '') + priceStr + descStr;
   document.getElementById('edit-name').value = item.name;
   document.getElementById('edit-qty').value = qty;
 }
@@ -809,6 +814,7 @@ function toggleEdit() {
     document.getElementById('edit-uom').value = currentItem.uom || 'EACH';
     document.getElementById('edit-price').value = parseFloat(currentItem.unit_price) || '';
     document.getElementById('edit-cost').value = parseFloat(currentItem.purchase_cost) || '';
+    document.getElementById('edit-description').value = currentItem.description || '';
   }
 }
 
@@ -871,7 +877,7 @@ async function saveEdit() {
   try {
     let updated = await apiFetch('/api/proclean/items/' + currentItem.qbo_id, {
       method: 'PATCH',
-      body: JSON.stringify({ name, qty_on_hand: qty, uom, note: note || null })
+      body: JSON.stringify({ name, qty_on_hand: qty, uom, note: note || null, description: document.getElementById('edit-description').value.trim() || null })
     });
     // Update sale price separately if changed
     if (newPrice !== '' && parseFloat(newPrice) !== parseFloat(currentItem.unit_price)) {
