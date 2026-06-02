@@ -504,7 +504,7 @@
         <div class="form-row">
           <div class="form-group">
             <label class="form-label">Display Name</label>
-            <input class="form-input" id="edit-name" placeholder="Name" />
+            <input class="form-input" id="edit-name" placeholder="Name" oninput="onNameInput()" />
           </div>
           <div class="form-group">
             <label class="form-label">Quantity</label>
@@ -539,11 +539,12 @@
           <input class="form-input" id="edit-note" placeholder="Reason for adjustment…" />
         </div>
         <div id="edit-error" class="form-error" style="display:none"></div>
+        <div id="name-check-result" style="display:none;padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:8px;border:1px solid var(--border);background:var(--surface2)"></div>
         <div class="edit-actions" style="justify-content: space-between">
           <button class="btn-danger" onclick="deactivateItem()">Make Inactive in QBO</button>
           <div style="display:flex;gap:10px">
             <button class="btn-ghost" onclick="toggleEdit()">Cancel</button>
-            <button class="btn-primary" onclick="saveEdit()">Save Changes</button>
+            <button class="btn-primary" id="save-btn" onclick="saveEdit()">Save Changes</button>
           </div>
         </div>
       </div>
@@ -811,6 +812,49 @@ function toggleEdit() {
   }
 }
 
+let nameCheckData = null;
+let nameCheckTimer = null;
+
+async function onNameInput() {
+  const name = document.getElementById('edit-name').value.trim();
+  const resultEl = document.getElementById('name-check-result');
+  if (!name || !currentItem || name === currentItem.name) {
+    resultEl.style.display = 'none';
+    nameCheckData = null;
+    return;
+  }
+  // Debounce — wait 600ms after typing stops
+  clearTimeout(nameCheckTimer);
+  nameCheckTimer = setTimeout(async () => {
+    resultEl.style.display = 'block';
+    resultEl.style.background = 'var(--surface2)';
+    resultEl.style.color = 'var(--text2)';
+    resultEl.style.borderColor = 'var(--border)';
+    resultEl.textContent = 'Checking other companies…';
+    try {
+      const data = await apiFetch('/api/proclean/items/' + currentItem.qbo_id + '/name-check?name=' + encodeURIComponent(currentItem.name));
+      nameCheckData = data.matches;
+      const found = data.matches.filter(m => m.found);
+      const notFound = data.matches.filter(m => !m.found);
+      if (found.length === 0) {
+        resultEl.textContent = '📋 No matches outside ProClean — will only update ProClean';
+        resultEl.style.background = 'var(--surface2)';
+        resultEl.style.color = 'var(--text2)';
+        resultEl.style.borderColor = 'var(--border)';
+      } else {
+        const names = found.map(m => m.company).join(' and ');
+        resultEl.textContent = '✓ Also found in: ' + names + ' — will update all matching companies';
+        resultEl.style.background = 'var(--green-dim)';
+        resultEl.style.color = 'var(--green)';
+        resultEl.style.borderColor = 'rgba(56,161,105,0.3)';
+      }
+    } catch(e) {
+      resultEl.textContent = 'Could not check other companies — will update ProClean only';
+      resultEl.style.color = 'var(--text3)';
+    }
+  }, 600);
+}
+
 async function saveEdit() {
   if (!currentItem) return;
   const name = document.getElementById('edit-name').value.trim();
@@ -848,6 +892,8 @@ async function saveEdit() {
     renderDetail(updated);
     const movements = await apiFetch('/api/proclean/items/' + currentItem.qbo_id + '/movements');
     renderMovLog(movements, updated);
+    document.getElementById('name-check-result').style.display = 'none';
+    nameCheckData = null;
     toggleEdit();
     allItems = allItems.map(i => i.qbo_id === updated.qbo_id ? updated : i);
   } catch(e) {
