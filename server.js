@@ -1492,6 +1492,147 @@ app.post('/api/proclean/items/:qboId/deactivate', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// GET export ProClean inventory as Excel (CSV for simplicity, opens in Excel)
+app.get('/api/proclean/export', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT name, sku, uom, qty_on_hand, unit_price, purchase_cost,
+             (qty_on_hand * unit_price) as sale_value,
+             (qty_on_hand * purchase_cost) as cost_value,
+             last_synced, last_updated_by
+      FROM proclean_items
+      WHERE item_type = 'Inventory'
+      ORDER BY name ASC
+    `);
+
+    const header = 'Item Name,SKU,UOM,Qty On Hand,Sale Price,Cost Price,Sale Value,Cost Value,Last Synced,Last Updated By
+';
+    const rows = result.rows.map(r => [
+      `"${(r.name||'').replace(/"/g,'""')}"`,
+      `"${(r.sku||'').replace(/"/g,'""')}"`,
+      r.uom || '',
+      r.qty_on_hand || 0,
+      parseFloat(r.unit_price || 0).toFixed(2),
+      parseFloat(r.purchase_cost || 0).toFixed(2),
+      parseFloat(r.sale_value || 0).toFixed(2),
+      parseFloat(r.cost_value || 0).toFixed(2),
+      r.last_synced ? new Date(r.last_synced).toLocaleString('en-US') : '',
+      r.last_updated_by || ''
+    ].join(',')).join('
+');
+
+    const date = new Date().toISOString().split('T')[0];
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="ProClean_Inventory_${date}.csv"`);
+    res.send(header + rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET export Production (Pakistan) inventory as Excel - no prices
+app.get('/api/proclean/export-production', async (req, res) => {
+  const PRODUCTION_SKUS = [
+    '10BT','12OZWC','1414B','1414BL','1414R','1426B','16OZWC','1818H','1818PW',
+    '2.75HT','4.5BT','5.5BT','5BATHMAT','5BT','6BT','7BATHMAT','8BT',
+    'BGRADEBM','BIBS-BLUE','BIBS-WHT','BLKT2.5','BMT30','BMT28',
+    'KNITFIT15','KNITFIT19','KNITFIT24',
+    'PLT12121HM','PLT16273','PLT20307','PLT2450105',
+    'T130PC','T13066104','T180108110','T180608012','T18066104','T180788012','T18081110','T18090110','T180PC',
+    'T200108110','T200548012','T200608012','T200788012','T20081110','T20090110','T200PC',
+    'PR10.5BT','PR10BT','PR1WC','PR3HT','PR5.5BT','PR6BT','PR.75WC','PR7BATHMAT','PR8BT'
+  ];
+  try {
+    const result = await pool.query(`
+      SELECT name, sku, qty_on_hand, last_synced
+      FROM proclean_items
+      WHERE item_type = 'Inventory'
+      ORDER BY name ASC
+    `);
+
+    const items = result.rows.filter(r =>
+      PRODUCTION_SKUS.includes((r.name||'').toUpperCase()) ||
+      PRODUCTION_SKUS.includes((r.sku||'').toUpperCase())
+    );
+
+    const header = 'Item Name,SKU,Qty On Hand,Last Synced
+';
+    const rows = items.map(r => [
+      `"${(r.name||'').replace(/"/g,'""')}"`,
+      `"${(r.sku||'').replace(/"/g,'""')}"`,
+      r.qty_on_hand || 0,
+      r.last_synced ? new Date(r.last_synced).toLocaleString('en-US') : '',
+    ].join(',')).join('
+');
+
+    const date = new Date().toISOString().split('T')[0];
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="Production_Inventory_${date}.csv"`);
+    res.send(header + rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET monthly summary for production dashboard
+app.get('/api/proclean/monthly-summary', async (req, res) => {
+  const PRODUCTION_SKUS = [
+    '10BT','12OZWC','1414B','1414BL','1414R','1426B','16OZWC','1818H','1818PW',
+    '2.75HT','4.5BT','5.5BT','5BATHMAT','5BT','6BT','7BATHMAT','8BT',
+    'BGRADEBM','BIBS-BLUE','BIBS-WHT','BLKT2.5','BMT30','BMT28',
+    'KNITFIT15','KNITFIT19','KNITFIT24',
+    'PLT12121HM','PLT16273','PLT20307','PLT2450105',
+    'T130PC','T13066104','T180108110','T180608012','T18066104','T180788012','T18081110','T18090110','T180PC',
+    'T200108110','T200548012','T200608012','T200788012','T20081110','T20090110','T200PC',
+    'PR10.5BT','PR10BT','PR1WC','PR3HT','PR5.5BT','PR6BT','PR.75WC','PR7BATHMAT','PR8BT'
+  ];
+  try {
+    // Get all production items
+    const itemsRes = await pool.query(`SELECT qbo_id, name, sku FROM proclean_items WHERE item_type = 'Inventory'`);
+    const prodItems = itemsRes.rows.filter(r =>
+      PRODUCTION_SKUS.includes((r.name||'').toUpperCase()) ||
+      PRODUCTION_SKUS.includes((r.sku||'').toUpperCase())
+    );
+    const prodIds = prodItems.map(i => i.qbo_id);
+
+    if (!prodIds.length) return res.json([]);
+
+    // Get all movements for production items grouped by month
+    const movRes = await pool.query(`
+      SELECT
+        qbo_id, item_name,
+        TO_CHAR(created_at, 'YYYY-MM') as month,
+        movement_type,
+        SUM(quantity) as total_qty,
+        COUNT(*) as move_count
+      FROM proclean_movements
+      WHERE qbo_id = ANY($1)
+      GROUP BY qbo_id, item_name, month, movement_type
+      ORDER BY month DESC, item_name ASC
+    `, [prodIds]);
+
+    // Structure: { month: { itemName: { in, out, count } } }
+    const summary = {};
+    for (const row of movRes.rows) {
+      if (!summary[row.month]) summary[row.month] = {};
+      if (!summary[row.month][row.item_name]) summary[row.month][row.item_name] = { in: 0, out: 0, count: 0 };
+      if (row.movement_type === 'restock') summary[row.month][row.item_name].in += parseFloat(row.total_qty);
+      else summary[row.month][row.item_name].out += parseFloat(row.total_qty);
+      summary[row.month][row.item_name].count += parseInt(row.move_count);
+    }
+
+    // Convert to array
+    const result = Object.keys(summary).sort().reverse().map(month => ({
+      month,
+      items: Object.keys(summary[month]).sort().map(name => ({
+        name,
+        in: summary[month][name].in,
+        out: summary[month][name].out,
+        count: summary[month][name].count,
+        net: summary[month][name].in - summary[month][name].out,
+      }))
+    }));
+
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // POST force sync from QBO
 app.post('/api/proclean/sync', async (req, res) => {
   try {
@@ -1513,6 +1654,14 @@ app.get('/proclean/*', (req, res) => {
 // Serve Production Dashboard (read-only, Pakistan team)
 app.get('/production', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'production.html'));
+});
+
+// PWA manifests
+app.get('/manifest-proclean.json', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'manifest-proclean.json'));
+});
+app.get('/manifest-production.json', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'manifest-production.json'));
 });
 
 // ─── START ────────────────────────────────────────────────────────────────────
