@@ -1515,7 +1515,7 @@ app.get('/api/proclean/export', async (req, res) => {
       parseFloat(r.purchase_cost || 0).toFixed(2),
       parseFloat(r.sale_value || 0).toFixed(2),
       parseFloat(r.cost_value || 0).toFixed(2),
-      r.last_synced ? new Date(r.last_synced).toLocaleString('en-US') : '',
+      r.last_synced ? new Date(r.last_synced).toLocaleString('en-US', { timeZone: 'America/New_York' }) : '',
       r.last_updated_by || ''
     ].join(',')).join('\n');
 
@@ -1556,7 +1556,7 @@ app.get('/api/proclean/export-production', async (req, res) => {
       `"${(r.name||'').replace(/"/g,'""')}"`,
       `"${(r.sku||'').replace(/"/g,'""')}"`,
       r.qty_on_hand || 0,
-      r.last_synced ? new Date(r.last_synced).toLocaleString('en-US') : '',
+      r.last_synced ? new Date(r.last_synced).toLocaleString('en-US', { timeZone: 'America/New_York' }) : '',
     ].join(',')).join('\n');
 
     const date = new Date().toISOString().split('T')[0];
