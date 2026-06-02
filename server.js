@@ -1332,7 +1332,29 @@ app.get('/api/proclean/stats', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// PATCH item (qty, name, uom) → writes to QBO
+// GET check which companies have an item by name (pre-save check)
+app.get('/api/proclean/items/:qboId/name-check', async (req, res) => {
+  const { name } = req.query;
+  if (!name) return res.status(400).json({ error: 'name required' });
+  try {
+    const matches = [];
+    for (const companyKey of ['company2', 'company3']) {
+      const company = appData.companies[companyKey];
+      if (!company?.tokens) continue;
+      try {
+        const encoded = encodeURIComponent(`SELECT * FROM Item WHERE Name = '${name.replace(/'/g, "\'")}'`);
+        const result = await qboGet(companyKey, `query?query=${encoded}`);
+        const found = result.QueryResponse?.Item?.length > 0;
+        matches.push({ company: company.name || companyKey, found });
+      } catch(err) {
+        matches.push({ company: company.name || companyKey, found: false, error: err.message });
+      }
+    }
+    res.json({ matches });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PATCH item (qty, name, uom) → writes to QBO (name update checks all 3 companies)
 app.patch('/api/proclean/items/:qboId', async (req, res) => {
   const { qty_on_hand, name, uom, note } = req.body;
   try {
@@ -1347,6 +1369,55 @@ app.patch('/api/proclean/items/:qboId', async (req, res) => {
     const updatedItem = qboResult.Item;
     const updatedName = name !== undefined ? name : item.name;
     const updatedUom = uom !== undefined ? uom : item.uom;
+
+    // If name changed, update ProClean name in QBO and check Linen Pros + Brown Eyed Girl
+    const nameChanged = name !== undefined && name !== item.name;
+    if (nameChanged) {
+      // Update name in ProClean QBO
+      const company1 = appData.companies['company1'];
+      const token1 = await getAccessToken('company1');
+      const qboItemData = await qboGet('company1', 'item/' + item.qbo_id);
+      if (qboItemData.Item) {
+        await fetch(`${QBO_BASE}/${company1.realmId}/item`, {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token1, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({ ...qboItemData.Item, Name: updatedName, SyncToken: qboItemData.Item.SyncToken })
+        });
+      }
+
+      // Check and update Linen Pros (company2) and Brown Eyed Girl (company3)
+      const nameUpdates = [];
+      for (const companyKey of ['company2', 'company3']) {
+        const company = appData.companies[companyKey];
+        if (!company?.tokens) continue;
+        try {
+          // Search for item by current name in this company
+          const encoded = encodeURIComponent(`SELECT * FROM Item WHERE Name = '${item.name.replace(/'/g, "\'")}'`);
+          const searchResult = await qboGet(companyKey, `query?query=${encoded}`);
+          const foundItem = searchResult.QueryResponse?.Item?.[0];
+          if (!foundItem) {
+            nameUpdates.push({ company: company.name, found: false });
+            continue;
+          }
+          // Update name in this company
+          const token = await getAccessToken(companyKey);
+          const updateRes = await fetch(`${QBO_BASE}/${company.realmId}/item`, {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ ...foundItem, Name: updatedName, SyncToken: foundItem.SyncToken })
+          });
+          const updateData = await updateRes.json();
+          if (updateData.Item) {
+            nameUpdates.push({ company: company.name, found: true, updated: true });
+          } else {
+            nameUpdates.push({ company: company.name, found: true, updated: false, error: JSON.stringify(updateData.Fault) });
+          }
+        } catch (err) {
+          nameUpdates.push({ company: company.name, found: false, error: err.message });
+        }
+      }
+      console.log('[Name Update] Results:', JSON.stringify(nameUpdates));
+    }
 
     await pool.query(
       'UPDATE proclean_items SET qty_on_hand=$1, sync_token=$2, name=$3, uom=$4, last_synced=NOW(), last_updated_by=$5 WHERE qbo_id=$6',
