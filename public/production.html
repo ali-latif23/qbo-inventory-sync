@@ -4,6 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Production Dashboard — Atlanta Warehouse</title>
+  <link rel="manifest" href="/manifest-production.json" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Production" />
+  <meta name="theme-color" content="#2d2d2d" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
@@ -179,6 +185,20 @@
     .mov-full { display: flex; flex-direction: column; gap: 6px; }
     .mov-full-item { display: grid; grid-template-columns: 28px 1fr auto auto; align-items: center; gap: 12px; padding: 10px 14px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); }
 
+    /* ── Monthly Summary ── */
+    .month-block { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); margin-bottom: 20px; overflow: hidden; box-shadow: var(--shadow); }
+    .month-header { padding: 14px 20px; background: var(--surface2); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+    .month-title { font-size: 14px; font-weight: 700; font-family: var(--mono); }
+    .month-meta { font-size: 12px; color: var(--text3); }
+    .month-table { width: 100%; border-collapse: collapse; }
+    .month-table th { padding: 9px 16px; text-align: left; font-size: 11px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.07em; border-bottom: 1px solid var(--border); background: var(--surface2); }
+    .month-table td { padding: 10px 16px; border-bottom: 1px solid var(--border); font-size: 13px; }
+    .month-table tr:last-child td { border-bottom: none; }
+    .month-table tr:hover td { background: #f0f0f0; }
+    .net-pos { color: var(--green); font-weight: 700; font-family: var(--mono); }
+    .net-neg { color: var(--red); font-weight: 700; font-family: var(--mono); }
+    .net-zero { color: var(--text3); font-family: var(--mono); }
+
     /* ── Loading ── */
     .loading { display: flex; align-items: center; justify-content: center; height: 200px; color: var(--text3); font-size: 13px; gap: 8px; }
     .spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.7s linear infinite; }
@@ -208,6 +228,10 @@
       <button class="nav-item" onclick="showPage('movements')">
         <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
         Movements
+      </button>
+      <button class="nav-item" onclick="showPage('monthly')">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><path stroke-linecap="round" stroke-linejoin="round" d="M16 2v4M8 2v4M3 10h18"/></svg>
+        Monthly Summary
       </button>
     </nav>
     <div class="sidebar-footer">
@@ -265,6 +289,10 @@
           <h1 class="page-title">Inventory</h1>
           <p class="page-sub" id="inv-sub">Loading…</p>
         </div>
+        <a href="/api/proclean/export-production" download style="display:flex;align-items:center;gap:7px;background:#2d2d2d;color:white;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:600;font-family:inherit;text-decoration:none;cursor:pointer">
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          Export to Excel
+        </a>
       </div>
       <div class="toolbar">
         <div class="search-wrap">
@@ -355,6 +383,17 @@
       </div>
     </div>
 
+    <!-- MONTHLY SUMMARY -->
+    <div class="page" id="page-monthly">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Monthly Summary</h1>
+          <p class="page-sub">Stock in vs out per item, all time</p>
+        </div>
+      </div>
+      <div id="monthly-content"><div class="loading"><div class="spinner"></div></div></div>
+    </div>
+
   </main>
 </div>
 
@@ -382,11 +421,12 @@ function showPage(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-' + name).classList.add('active');
-  const map = { dashboard: 0, inventory: 1, detail: 1, movements: 2 };
+  const map = { dashboard: 0, inventory: 1, detail: 1, movements: 2, monthly: 3 };
   if (map[name] !== undefined) document.querySelectorAll('.nav-item')[map[name]].classList.add('active');
   if (name === 'dashboard') renderDashboard();
   if (name === 'inventory') renderInventory();
   if (name === 'movements') renderMovementsPage();
+  if (name === 'monthly') renderMonthlySummary();
 }
 
 // ── Load data ────────────────────────────────────────────────────────────────
@@ -662,6 +702,47 @@ function fmtDate(ts) {
 function fmtShort(ts) {
   if (!ts) return '—';
   return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+// ── Monthly Summary ───────────────────────────────────────────────────────
+async function renderMonthlySummary() {
+  const el = document.getElementById('monthly-content');
+  el.innerHTML = '<div class="loading"><div class="spinner"></div> Loading…</div>';
+  try {
+    const data = await fetch(API + '/api/proclean/monthly-summary').then(r => r.json());
+    if (!data.length) { el.innerHTML = '<div class="empty-state">No movement history yet</div>'; return; }
+
+    el.innerHTML = data.map(month => {
+      const totalIn = month.items.reduce((s, i) => s + i.in, 0);
+      const totalOut = month.items.reduce((s, i) => s + i.out, 0);
+      const [year, mo] = month.month.split('-');
+      const monthName = new Date(year, mo - 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
+      return `<div class="month-block">
+        <div class="month-header">
+          <div class="month-title">${monthName}</div>
+          <div class="month-meta">+${totalIn.toLocaleString()} in · −${totalOut.toLocaleString()} out · ${month.items.length} items active</div>
+        </div>
+        <table class="month-table">
+          <thead><tr><th>Item</th><th>Restocked</th><th>Deducted</th><th>Net</th><th>Movements</th></tr></thead>
+          <tbody>
+            ${month.items.map(i => {
+              const netClass = i.net > 0 ? 'net-pos' : i.net < 0 ? 'net-neg' : 'net-zero';
+              const netStr = i.net > 0 ? '+' + i.net.toLocaleString() : i.net.toLocaleString();
+              return `<tr>
+                <td><strong>${i.name}</strong></td>
+                <td style="color:var(--green);font-family:var(--mono)">+${i.in.toLocaleString()}</td>
+                <td style="color:var(--red);font-family:var(--mono)">−${i.out.toLocaleString()}</td>
+                <td class="${netClass}">${netStr}</td>
+                <td style="color:var(--text3);font-family:var(--mono)">${i.count}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    el.innerHTML = '<div class="empty-state">Error loading: ' + e.message + '</div>';
+  }
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────
