@@ -1505,8 +1505,7 @@ app.get('/api/proclean/export', async (req, res) => {
       ORDER BY name ASC
     `);
 
-    const header = 'Item Name,SKU,UOM,Qty On Hand,Sale Price,Cost Price,Sale Value,Cost Value,Last Synced,Last Updated By
-';
+    const header = 'Item Name,SKU,UOM,Qty On Hand,Sale Price,Cost Price,Sale Value,Cost Value,Last Synced,Last Updated By\n';
     const rows = result.rows.map(r => [
       `"${(r.name||'').replace(/"/g,'""')}"`,
       `"${(r.sku||'').replace(/"/g,'""')}"`,
@@ -1518,8 +1517,7 @@ app.get('/api/proclean/export', async (req, res) => {
       parseFloat(r.cost_value || 0).toFixed(2),
       r.last_synced ? new Date(r.last_synced).toLocaleString('en-US') : '',
       r.last_updated_by || ''
-    ].join(',')).join('
-');
+    ].join(',')).join('\n');
 
     const date = new Date().toISOString().split('T')[0];
     res.setHeader('Content-Type', 'text/csv');
@@ -1553,15 +1551,13 @@ app.get('/api/proclean/export-production', async (req, res) => {
       PRODUCTION_SKUS.includes((r.sku||'').toUpperCase())
     );
 
-    const header = 'Item Name,SKU,Qty On Hand,Last Synced
-';
+    const header = 'Item Name,SKU,Qty On Hand,Last Synced\n';
     const rows = items.map(r => [
       `"${(r.name||'').replace(/"/g,'""')}"`,
       `"${(r.sku||'').replace(/"/g,'""')}"`,
       r.qty_on_hand || 0,
       r.last_synced ? new Date(r.last_synced).toLocaleString('en-US') : '',
-    ].join(',')).join('
-');
+    ].join(',')).join('\n');
 
     const date = new Date().toISOString().split('T')[0];
     res.setHeader('Content-Type', 'text/csv');
