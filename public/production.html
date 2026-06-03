@@ -185,6 +185,45 @@
     .mov-full { display: flex; flex-direction: column; gap: 6px; }
     .mov-full-item { display: grid; grid-template-columns: 28px 1fr auto auto; align-items: center; gap: 12px; padding: 10px 14px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); }
 
+    /* ── Pakistan Stock ── */
+    .pk-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
+    .btn-dark { display: flex; align-items: center; gap: 7px; background: #2d2d2d; color: white; border: none; border-radius: var(--radius); padding: 8px 14px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: var(--font); transition: background 0.15s; }
+    .btn-dark:hover { background: #1a1a1a; }
+    .btn-outline { display: flex; align-items: center; gap: 6px; background: white; color: var(--text2); border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 12px; font-size: 12px; font-weight: 500; cursor: pointer; font-family: var(--font); transition: all 0.15s; }
+    .btn-outline:hover { border-color: #888; color: var(--text); }
+    .btn-red { background: var(--red-dim); color: var(--red); border: 1px solid rgba(229,62,62,0.3); border-radius: var(--radius); padding: 5px 10px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: var(--font); transition: all 0.15s; white-space: nowrap; }
+    .btn-red:hover { background: var(--red); color: white; }
+    .pk-table-wrap { overflow-x: auto; background: white; border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow); }
+    .pk-table { border-collapse: collapse; width: 100%; min-width: 800px; }
+    .pk-table th { padding: 9px 12px; text-align: left; font-size: 10px; font-weight: 700; color: var(--text3); text-transform: uppercase; letter-spacing: 0.07em; border-bottom: 1px solid var(--border); background: var(--surface2); white-space: nowrap; }
+    .pk-table th.shipment-header { background: #2d2d2d; color: white; text-align: center; }
+    .pk-table th.shipment-eta { font-size: 9px; font-weight: 400; color: #aaa; display: block; margin-top: 2px; }
+    .pk-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
+    .pk-table tr:last-child td { border-bottom: none; }
+    .pk-table tr:hover td { background: #fafafa; }
+    .pk-name { font-weight: 600; color: var(--text); }
+    .pk-alias { font-size: 10px; color: var(--text3); font-family: var(--mono); display: block; margin-top: 1px; }
+    .pk-qty-cell { text-align: center; }
+    .pk-input { width: 72px; text-align: center; background: var(--surface2); border: 1px solid var(--border); border-radius: 5px; padding: 4px 6px; font-size: 12px; font-family: var(--mono); color: var(--text); outline: none; }
+    .pk-input:focus { border-color: #555; background: white; }
+    .pk-total { font-family: var(--mono); font-size: 13px; font-weight: 700; text-align: center; color: #2d2d2d; }
+    .pk-atl { font-family: var(--mono); font-size: 13px; font-weight: 700; text-align: center; }
+    .pk-uom { font-family: var(--mono); font-size: 10px; color: var(--text3); }
+    .shipment-col { text-align: center; background: rgba(45,45,45,0.03); }
+    .zero-btn-wrap { text-align: center; padding: 6px 12px; background: rgba(45,45,45,0.03); border-bottom: 1px solid var(--border); }
+    /* Modal */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 200; backdrop-filter: blur(3px); }
+    .modal-box { background: white; border-radius: var(--radius-lg); width: 380px; max-width: 95vw; box-shadow: var(--shadow-md); }
+    .modal-box-header { padding: 16px 20px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+    .modal-box-header h3 { font-size: 15px; font-weight: 700; }
+    .modal-close-btn { background: none; border: none; font-size: 18px; cursor: pointer; color: var(--text3); line-height: 1; }
+    .modal-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+    .modal-footer { padding: 12px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; justify-content: flex-end; }
+    .form-group-pk { display: flex; flex-direction: column; gap: 5px; }
+    .form-label-pk { font-size: 11px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.07em; }
+    .form-input-pk { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; color: var(--text); font-size: 13px; outline: none; font-family: var(--font); }
+    .form-input-pk:focus { border-color: #555; }
+
     /* ── Monthly Summary ── */
     .month-block { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); margin-bottom: 20px; overflow: hidden; box-shadow: var(--shadow); }
     .month-header { padding: 14px 20px; background: var(--surface2); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
@@ -232,6 +271,10 @@
       <button class="nav-item" onclick="showPage('monthly')">
         <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><path stroke-linecap="round" stroke-linejoin="round" d="M16 2v4M8 2v4M3 10h18"/></svg>
         Monthly Summary
+      </button>
+      <button class="nav-item" onclick="showPage('pakistan')">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3 10h18M3 14h18M10 4v16M14 4v16M3 4h18M3 20h18" stroke-width="1.2"/></svg>
+        Pakistan Stock
       </button>
     </nav>
     <div class="sidebar-footer">
@@ -383,6 +426,50 @@
       </div>
     </div>
 
+    <!-- PAKISTAN STOCK -->
+    <div class="page" id="page-pakistan">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Pakistan Stock</h1>
+          <p class="page-sub">Inventory in Pakistan + shipments on water · Editable by production team</p>
+        </div>
+        <a href="/api/pk/export" download class="btn-dark" style="text-decoration:none">
+          <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          Export to Excel
+        </a>
+      </div>
+      <div class="pk-toolbar">
+        <div style="font-size:12px;color:var(--text3)">Click any quantity to edit · Changes save automatically · ATL column is read-only</div>
+        <button class="btn-dark" onclick="showAddShipment()" id="add-shipment-btn">+ Add Shipment</button>
+      </div>
+      <div id="pk-content"><div class="loading"><div class="spinner"></div> Loading…</div></div>
+    </div>
+
+    <!-- ADD SHIPMENT MODAL -->
+    <div class="modal-overlay" id="add-shipment-modal" style="display:none" onclick="if(event.target===this)hideAddShipment()">
+      <div class="modal-box">
+        <div class="modal-box-header">
+          <h3>Add Shipment</h3>
+          <button class="modal-close-btn" onclick="hideAddShipment()">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group-pk">
+            <label class="form-label-pk">Shipment Name (e.g. TSI/300)</label>
+            <input class="form-input-pk" id="new-ship-name" placeholder="TSI/300" />
+          </div>
+          <div class="form-group-pk">
+            <label class="form-label-pk">ETA Date</label>
+            <input class="form-input-pk" id="new-ship-eta" type="date" />
+          </div>
+          <div id="add-ship-error" style="color:var(--red);font-size:12px;display:none"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-outline" onclick="hideAddShipment()">Cancel</button>
+          <button class="btn-dark" onclick="addShipment()">Add Shipment</button>
+        </div>
+      </div>
+    </div>
+
     <!-- MONTHLY SUMMARY -->
     <div class="page" id="page-monthly">
       <div class="page-header">
@@ -421,12 +508,13 @@ function showPage(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-' + name).classList.add('active');
-  const map = { dashboard: 0, inventory: 1, detail: 1, movements: 2, monthly: 3 };
+  const map = { dashboard: 0, inventory: 1, detail: 1, movements: 2, monthly: 3, pakistan: 4 };
   if (map[name] !== undefined) document.querySelectorAll('.nav-item')[map[name]].classList.add('active');
   if (name === 'dashboard') renderDashboard();
   if (name === 'inventory') renderInventory();
   if (name === 'movements') renderMovementsPage();
   if (name === 'monthly') renderMonthlySummary();
+  if (name === 'pakistan') renderPakistanStock();
 }
 
 // ── Load data ────────────────────────────────────────────────────────────────
@@ -743,6 +831,135 @@ async function renderMonthlySummary() {
   } catch(e) {
     el.innerHTML = '<div class="empty-state">Error loading: ' + e.message + '</div>';
   }
+}
+
+// ── Pakistan Stock ───────────────────────────────────────────────────────────
+let pkData = null;
+let saveTimers = {};
+
+async function renderPakistanStock() {
+  const el = document.getElementById('pk-content');
+  el.innerHTML = '<div class="loading"><div class="spinner"></div> Loading…</div>';
+  try {
+    const data = await fetch(API + '/api/pk/inventory').then(r => r.json());
+    pkData = data;
+    buildPkTable(data);
+    // Hide add button if 5 shipments
+    document.getElementById('add-shipment-btn').style.display =
+      data.shipments.length >= 5 ? 'none' : 'flex';
+  } catch(e) {
+    el.innerHTML = '<div class="empty-state">Error loading: ' + e.message + '</div>';
+  }
+}
+
+function buildPkTable(data) {
+  const { items, shipments } = data;
+  const el = document.getElementById('pk-content');
+
+  let html = '<div class="pk-table-wrap"><table class="pk-table">';
+
+  // Header row 1
+  html += '<thead><tr>';
+  html += '<th style="min-width:140px">Item</th>';
+  html += '<th style="min-width:50px">UOM</th>';
+  html += '<th style="min-width:90px;text-align:center">Qty in Pakistan</th>';
+  shipments.forEach(s => {
+    const eta = s.eta ? new Date(s.eta).toLocaleDateString('en-US', {month:'short',day:'numeric',year:'numeric'}) : 'TBD';
+    html += `<th class="shipment-header" style="min-width:100px">${s.name}<span class="shipment-eta">ETA: ${eta}</span></th>`;
+  });
+  html += '<th style="min-width:90px;text-align:center;background:#f7f7f7">Total On Water</th>';
+  html += '<th style="min-width:90px;text-align:center;background:#ebf8ff;color:#2c5282">ATL Qty</th>';
+  html += '</tr>';
+
+  // Zero out row for shipments
+  if (shipments.length > 0) {
+    html += '<tr>';
+    html += '<td colspan="3" style="border-bottom:1px solid var(--border);background:#fafafa;font-size:11px;color:var(--text3);padding:6px 12px">Zero out when container arrives:</td>';
+    shipments.forEach(s => {
+      html += `<td class="zero-btn-wrap"><button class="btn-red" onclick="zeroOutShipment(${s.id},'${s.name}')">Zero Out & Remove</button></td>`;
+    });
+    html += '<td style="border-bottom:1px solid var(--border);background:#f7f7f7"></td>';
+    html += '<td style="border-bottom:1px solid var(--border);background:#ebf8ff"></td>';
+    html += '</tr>';
+  }
+  html += '</thead><tbody>';
+
+  // Data rows
+  items.forEach(item => {
+    html += '<tr>';
+    html += `<td><span class="pk-name">${item.pk_name}</span>${item.proclean_name ? `<span class="pk-alias">${item.proclean_name}</span>` : ''}</td>`;
+    html += `<td><span class="pk-uom">${item.uom}</span></td>`;
+    html += `<td class="pk-qty-cell"><input class="pk-input" type="number" value="${item.qty_in_pakistan||0}" onchange="savePkQty('${item.pk_name}',this.value)" /></td>`;
+    item.shipments.forEach(s => {
+      html += `<td class="shipment-col pk-qty-cell"><input class="pk-input" type="number" value="${s.qty||0}" onchange="saveShipmentQty(${s.shipment_id},'${item.pk_name}',this.value)" /></td>`;
+    });
+    const totalColor = item.total_on_water > 0 ? '#2d2d2d' : 'var(--text3)';
+    html += `<td style="background:#f7f7f7"><span class="pk-total" style="color:${totalColor}">${item.total_on_water}</span></td>`;
+    const atlQty = item.atl_qty !== null ? item.atl_qty : '—';
+    const atlColor = item.atl_qty === null ? 'var(--text3)' : item.atl_qty < 0 ? 'var(--red)' : item.atl_qty === 0 ? 'var(--text3)' : 'var(--green)';
+    html += `<td style="background:#ebf8ff"><span class="pk-atl" style="color:${atlColor}">${atlQty}</span></td>`;
+    html += '</tr>';
+  });
+
+  html += '</tbody></table></div>';
+  el.innerHTML = html;
+}
+
+async function savePkQty(pkName, value) {
+  try {
+    await fetch(API + '/api/pk/inventory/' + encodeURIComponent(pkName), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ qty_in_pakistan: parseFloat(value) || 0 })
+    });
+  } catch(e) { console.error('Save error:', e); }
+}
+
+async function saveShipmentQty(shipmentId, pkName, value) {
+  try {
+    await fetch(API + '/api/pk/shipments/' + shipmentId + '/items/' + encodeURIComponent(pkName), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quantity: parseFloat(value) || 0 })
+    });
+  } catch(e) { console.error('Save error:', e); }
+}
+
+async function zeroOutShipment(id, name) {
+  if (!confirm(`Zero out and remove shipment "${name}"? This cannot be undone.`)) return;
+  try {
+    await fetch(API + '/api/pk/shipments/' + id + '/zero-out', { method: 'POST' });
+    renderPakistanStock();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+function showAddShipment() {
+  document.getElementById('add-shipment-modal').style.display = 'flex';
+  document.getElementById('new-ship-name').value = '';
+  document.getElementById('new-ship-eta').value = '';
+  document.getElementById('add-ship-error').style.display = 'none';
+}
+
+function hideAddShipment() {
+  document.getElementById('add-shipment-modal').style.display = 'none';
+}
+
+async function addShipment() {
+  const name = document.getElementById('new-ship-name').value.trim();
+  const eta = document.getElementById('new-ship-eta').value;
+  const errEl = document.getElementById('add-ship-error');
+  if (!name) { errEl.textContent = 'Shipment name is required'; errEl.style.display = 'block'; return; }
+  try {
+    const res = await fetch(API + '/api/pk/shipments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, eta: eta || null })
+    });
+    const data = await res.json();
+    if (!res.ok) { errEl.textContent = data.error || 'Error adding shipment'; errEl.style.display = 'block'; return; }
+    hideAddShipment();
+    renderPakistanStock();
+  } catch(e) { errEl.textContent = e.message; errEl.style.display = 'block'; }
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────
