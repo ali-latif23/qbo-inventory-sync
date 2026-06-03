@@ -63,8 +63,14 @@ async function initDb() {
       proclean_name TEXT,
       uom TEXT NOT NULL DEFAULT 'DZ',
       qty_in_pakistan NUMERIC NOT NULL DEFAULT 0,
+      target_stock NUMERIC,
+      notes TEXT,
+      is_hot BOOLEAN NOT NULL DEFAULT FALSE,
       last_updated TIMESTAMPTZ DEFAULT NOW()
     );
+    ALTER TABLE pk_inventory ADD COLUMN IF NOT EXISTS target_stock NUMERIC;
+    ALTER TABLE pk_inventory ADD COLUMN IF NOT EXISTS notes TEXT;
+    ALTER TABLE pk_inventory ADD COLUMN IF NOT EXISTS is_hot BOOLEAN NOT NULL DEFAULT FALSE;
     CREATE TABLE IF NOT EXISTS pk_shipments (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
@@ -1315,24 +1321,25 @@ app.get('/proclean/*', (req, res) => {
 // ─── PAKISTAN INVENTORY API ──────────────────────────────────────────────────
 
 const PK_ITEMS = [
-  { pk_name: '10BT', proclean_name: null, uom: 'DZ' },
-  { pk_name: '12OZWC', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'BT10', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'WC75', proclean_name: null, uom: 'DZ' },
   { pk_name: '1414B', proclean_name: null, uom: 'BALE' },
   { pk_name: '1414BL', proclean_name: null, uom: 'BALE' },
   { pk_name: '1414R', proclean_name: null, uom: 'BALE' },
   { pk_name: '1426B', proclean_name: null, uom: 'BALE' },
-  { pk_name: '16OZWC', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'WC1', proclean_name: null, uom: 'DZ' },
   { pk_name: '1818H', proclean_name: null, uom: 'BALE' },
   { pk_name: '1818PW', proclean_name: null, uom: 'BALE' },
   { pk_name: '1616B', proclean_name: '1818HCM', uom: 'CARTON' },
-  { pk_name: '2.75HT', proclean_name: null, uom: 'DZ' },
-  { pk_name: '4.5BT', proclean_name: null, uom: 'DZ' },
-  { pk_name: '5.5BT', proclean_name: null, uom: 'DZ' },
-  { pk_name: '5BATHMAT', proclean_name: null, uom: 'DZ' },
-  { pk_name: '5BT', proclean_name: null, uom: 'DZ' },
-  { pk_name: '6BT', proclean_name: null, uom: 'DZ' },
-  { pk_name: '7BATHMAT', proclean_name: null, uom: 'DZ' },
-  { pk_name: '8BT', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'HT275', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'HT225', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'BT45', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'BT55', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'BM5', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'BT5', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'BT6', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'BM7', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'BT8', proclean_name: null, uom: 'DZ' },
   { pk_name: '16WCBR', proclean_name: '1WCBROWN', uom: 'DZ' },
   { pk_name: '6BTBR', proclean_name: '6BTBROWN', uom: 'DZ' },
   { pk_name: '8BTBR', proclean_name: '8BTBROWN', uom: 'DZ' },
@@ -1349,15 +1356,15 @@ const PK_ITEMS = [
   { pk_name: 'PLT16273', proclean_name: null, uom: 'DZ' },
   { pk_name: 'PLT20307', proclean_name: null, uom: 'DZ' },
   { pk_name: 'PLT2450105', proclean_name: null, uom: 'DZ' },
-  { pk_name: 'PR10.5BT', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PR105', proclean_name: null, uom: 'DZ' },
   { pk_name: 'PR10BT', proclean_name: null, uom: 'DZ' },
-  { pk_name: 'PR1WC', proclean_name: null, uom: 'DZ' },
-  { pk_name: 'PR3HT', proclean_name: null, uom: 'DZ' },
-  { pk_name: 'PR5.5BT', proclean_name: null, uom: 'DZ' },
-  { pk_name: 'PR6BT', proclean_name: null, uom: 'DZ' },
-  { pk_name: 'PR.75WC', proclean_name: null, uom: 'DZ' },
-  { pk_name: 'PR7BATHMAT', proclean_name: null, uom: 'DZ' },
-  { pk_name: 'PR8BT', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PR1', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PR3', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PR55', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PR6', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PR75', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PR7', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PR8', proclean_name: null, uom: 'DZ' },
   { pk_name: 'T13066104', proclean_name: null, uom: 'DZ' },
   { pk_name: 'T130PC', proclean_name: null, uom: 'DZ' },
   { pk_name: 'T180108110', proclean_name: null, uom: 'DZ' },
@@ -1381,16 +1388,37 @@ const PK_ITEMS = [
 // Seed pk_inventory if empty (including initial quantities and shipments from Mateen's sheet)
 async function seedPkInventory() {
   const existing = await pool.query('SELECT COUNT(*) FROM pk_inventory');
+
+  // Migration: rename items that changed in ProClean QBO
+  const renames = [
+    ['12OZWC','WC75'],['16OZWC','WC1'],['2.75HT','HT275'],['5BATHMAT','BM5'],
+    ['7BATHMAT','BM7'],['10BT','BT10'],['4.5BT','BT45'],['5BT','BT5'],
+    ['6BT','BT6'],['8BT','BT8'],['PR1WC','PR1'],['PR.75WC','PR75'],
+    ['PR3HT','PR3'],['PR5.5BT','PR55'],['PR6BT','PR6'],['PR7BATHMAT','PR7'],
+    ['PR8BT','PR8'],['PR10.5BT','PR105'],['5.5BT','BT55'],
+  ];
+  for (const [oldName, newName] of renames) {
+    try {
+      await pool.query('UPDATE pk_inventory SET pk_name=$1 WHERE pk_name=$2', [newName, oldName]);
+      await pool.query('UPDATE pk_shipment_items SET pk_name=$1 WHERE pk_name=$2', [newName, oldName]);
+    } catch(e) {} // ignore if already renamed
+  }
+
+  // Add HT225 if not exists
+  await pool.query(
+    "INSERT INTO pk_inventory (pk_name, proclean_name, uom, qty_in_pakistan) VALUES ('HT225', null, 'DZ', 0) ON CONFLICT DO NOTHING"
+  );
+
   if (parseInt(existing.rows[0].count) > 0) return;
 
   // Seed items with initial quantities from June 2026 inventory count
   const initialQtys = {
-    '12OZWC':5000,'1414B':0,'1414BL':10,'1414R':50,'1616B':135,'16OZWC':2540,
-    '1818H':15,'1818PW':64,'2.75HT':1320,'4.5BT':790,'6BT':610,'7BATHMAT':150,
-    '8BT':700,'BIBS-BLUE':120,'BIBS-WHT':120,'BLKT2.5':600,'BMT28':1750,
+    'WC75':5000,'1414B':0,'1414BL':10,'1414R':50,'1616B':135,'WC1':2540,
+    '1818H':15,'1818PW':64,'HT275':1320,'BT45':790,'BT6':610,'BM7':150,
+    'BT8':700,'BIBS-BLUE':120,'BIBS-WHT':120,'BLKT2.5':600,'BMT28':1750,
     'KNITFIT15':50,'KNITFIT19':300,'KNITFIT24':100,'PLT12121HM':800,'PLT16273':370,
-    'PLT20307':130,'PLT2450105':100,'PR10.5BT':900,'PR1WC':17100,'PR3HT':800,
-    'PR5.5BT':2100,'PR6BT':1125,'PR.75WC':9800,'PR7BATHMAT':140,'PR8BT':875,
+    'PLT20307':130,'PLT2450105':100,'PR105':900,'PR1':17100,'PR3':800,
+    'PR55':2100,'PR6':1125,'PR75':9800,'PR7':140,'PR8':875,
   };
 
   for (const item of PK_ITEMS) {
@@ -1408,8 +1436,8 @@ async function seedPkInventory() {
   ];
 
   const shipmentItems = {
-    'TSI/286': { '12OZWC':2000,'1414B':20,'1616B':45,'1818H':25,'1818PW':16,'4.5BT':200,'16WCBR':1800,'6BTBR':360,'8BTBR':160,'BIBS-BLUE':120,'BIBS-WHT':120,'KNITFIT15':200,'KNITFIT19':200,'PR10.5BT':200,'PR1WC':6000,'PR5.5BT':400,'PR6BT':400,'PR.75WC':2000,'PR8BT':250,'T180PC':500 },
-    'TSI/295': { '12OZWC':2000,'1414B':20,'1616B':45,'1818H':20,'1818PW':16,'4.5BT':350,'16WCBR':900,'6BTBR':150,'8BTBR':180,'BIBS-BLUE':48,'KNITFIT15':130,'KNITFIT19':300,'PR10.5BT':200,'PR1WC':6000,'PR3HT':650,'PR5.5BT':500,'PR6BT':300,'PR.75WC':2000,'PR7BATHMAT':100,'PR8BT':300,'BMT30':400,'T200PC':504 },
+    'TSI/286': { 'WC75':2000,'1414B':20,'1616B':45,'1818H':25,'1818PW':16,'BT45':200,'16WCBR':1800,'6BTBR':360,'8BTBR':160,'BIBS-BLUE':120,'BIBS-WHT':120,'KNITFIT15':200,'KNITFIT19':200,'PR105':200,'PR1':6000,'PR55':400,'PR6':400,'PR75':2000,'PR8':250,'T180PC':500 },
+    'TSI/295': { 'WC75':2000,'1414B':20,'1616B':45,'1818H':20,'1818PW':16,'BT45':350,'16WCBR':900,'6BTBR':150,'8BTBR':180,'BIBS-BLUE':48,'KNITFIT15':130,'KNITFIT19':300,'PR105':200,'PR1':6000,'PR3':650,'PR55':500,'PR6':300,'PR75':2000,'PR7':100,'PR8':300,'BMT30':400,'T200PC':504 },
     'SF/6410': { 'T13066104':600,'T130PC':2500,'T180108110':30,'T180608012':30,'T18066104':1000,'T180548012':30,'T180788012':30,'T18081110':30,'T18090110':30,'T180PC':2000,'T180-ZIPPER':300,'T200548012':30,'T200608012':30,'T200788012':30,'T20081110':30,'T20090110':20 },
   };
 
@@ -1515,6 +1543,42 @@ app.delete('/api/pk/shipments/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// PATCH notes for an item
+app.patch('/api/pk/inventory/:pkName/notes', async (req, res) => {
+  const { notes } = req.body;
+  try {
+    await pool.query(
+      'UPDATE pk_inventory SET notes=$1, last_updated=NOW() WHERE pk_name=$2',
+      [notes || null, req.params.pkName]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PATCH target stock for an item
+app.patch('/api/pk/inventory/:pkName/target', async (req, res) => {
+  const { target_stock } = req.body;
+  try {
+    await pool.query(
+      'UPDATE pk_inventory SET target_stock=$1, last_updated=NOW() WHERE pk_name=$2',
+      [target_stock !== '' && target_stock !== null ? parseFloat(target_stock) : null, req.params.pkName]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PATCH hot status for an item
+app.patch('/api/pk/inventory/:pkName/hot', async (req, res) => {
+  const { is_hot } = req.body;
+  try {
+    await pool.query(
+      'UPDATE pk_inventory SET is_hot=$1, last_updated=NOW() WHERE pk_name=$2',
+      [!!is_hot, req.params.pkName]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // PATCH qty for item in a shipment
 app.patch('/api/pk/shipments/:shipmentId/items/:pkName', async (req, res) => {
   const { quantity } = req.body;
@@ -1560,8 +1624,7 @@ app.get('/api/pk/export', async (req, res) => {
     }
 
     const shipHeaders = shipmentsRes.rows.map(s => `"${s.name} (ETA: ${s.eta ? new Date(s.eta).toLocaleDateString('en-US') : 'TBD'})"`).join(',');
-    const header = `Item Name,ProClean Name,UOM,Qty in Pakistan,${shipHeaders},Total On Water,Atlanta (ATL) Qty
-`;
+    const header = `Item Name,ProClean Name,UOM,Qty in Pakistan,${shipHeaders},Total On Water,Atlanta (ATL) Qty,Target ATL Stock,Hot Item,Notes\n`;
 
     const rows = itemsRes.rows.map(item => {
       const lookupName = (item.proclean_name || item.pk_name).toUpperCase();
@@ -1575,7 +1638,10 @@ app.get('/api/pk/export', async (req, res) => {
         item.qty_in_pakistan || 0,
         ...shipQtys,
         totalOnWater,
-        atl
+        atl,
+        item.target_stock !== null && item.target_stock !== undefined ? item.target_stock : '',
+        item.is_hot ? 'YES' : '',
+        `"${(item.notes || '').replace(/"/g, '""')}"`,
       ].join(',');
     }).join('\n');
 
