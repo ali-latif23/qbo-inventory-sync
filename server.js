@@ -58,6 +58,26 @@ async function initDb() {
     ALTER TABLE proclean_items ADD COLUMN IF NOT EXISTS unit_price NUMERIC NOT NULL DEFAULT 0;
     ALTER TABLE proclean_items ADD COLUMN IF NOT EXISTS purchase_cost NUMERIC NOT NULL DEFAULT 0;
     ALTER TABLE proclean_items ADD COLUMN IF NOT EXISTS description TEXT;
+    CREATE TABLE IF NOT EXISTS pk_inventory (
+      pk_name TEXT PRIMARY KEY,
+      proclean_name TEXT,
+      uom TEXT NOT NULL DEFAULT 'DZ',
+      qty_in_pakistan NUMERIC NOT NULL DEFAULT 0,
+      last_updated TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS pk_shipments (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      eta DATE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS pk_shipment_items (
+      id SERIAL PRIMARY KEY,
+      shipment_id INTEGER NOT NULL REFERENCES pk_shipments(id) ON DELETE CASCADE,
+      pk_name TEXT NOT NULL,
+      quantity NUMERIC NOT NULL DEFAULT 0,
+      UNIQUE(shipment_id, pk_name)
+    );
     CREATE TABLE IF NOT EXISTS proclean_movements (
       id SERIAL PRIMARY KEY,
       qbo_id TEXT NOT NULL REFERENCES proclean_items(qbo_id) ON DELETE CASCADE,
@@ -1292,6 +1312,280 @@ app.get('/proclean/*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'proclean.html'));
 });
 
+// ─── PAKISTAN INVENTORY API ──────────────────────────────────────────────────
+
+const PK_ITEMS = [
+  { pk_name: '10BT', proclean_name: null, uom: 'DZ' },
+  { pk_name: '12OZWC', proclean_name: null, uom: 'DZ' },
+  { pk_name: '1414B', proclean_name: null, uom: 'BALE' },
+  { pk_name: '1414BL', proclean_name: null, uom: 'BALE' },
+  { pk_name: '1414R', proclean_name: null, uom: 'BALE' },
+  { pk_name: '1426B', proclean_name: null, uom: 'BALE' },
+  { pk_name: '16OZWC', proclean_name: null, uom: 'DZ' },
+  { pk_name: '1818H', proclean_name: null, uom: 'BALE' },
+  { pk_name: '1818PW', proclean_name: null, uom: 'BALE' },
+  { pk_name: '1616B', proclean_name: '1818HCM', uom: 'CARTON' },
+  { pk_name: '2.75HT', proclean_name: null, uom: 'DZ' },
+  { pk_name: '4.5BT', proclean_name: null, uom: 'DZ' },
+  { pk_name: '5.5BT', proclean_name: null, uom: 'DZ' },
+  { pk_name: '5BATHMAT', proclean_name: null, uom: 'DZ' },
+  { pk_name: '5BT', proclean_name: null, uom: 'DZ' },
+  { pk_name: '6BT', proclean_name: null, uom: 'DZ' },
+  { pk_name: '7BATHMAT', proclean_name: null, uom: 'DZ' },
+  { pk_name: '8BT', proclean_name: null, uom: 'DZ' },
+  { pk_name: '16WCBR', proclean_name: '1WCBROWN', uom: 'DZ' },
+  { pk_name: '6BTBR', proclean_name: '6BTBROWN', uom: 'DZ' },
+  { pk_name: '8BTBR', proclean_name: '8BTBROWN', uom: 'DZ' },
+  { pk_name: 'BGRADEBM', proclean_name: null, uom: 'LB' },
+  { pk_name: 'BIBS-BLUE', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'BIBS-WHT', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'BLKT2.5', proclean_name: null, uom: 'EA' },
+  { pk_name: 'BMT28', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'BMT30', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'KNITFIT15', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'KNITFIT19', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'KNITFIT24', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PLT12121HM', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PLT16273', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PLT20307', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PLT2450105', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PR10.5BT', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PR10BT', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PR1WC', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PR3HT', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PR5.5BT', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PR6BT', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PR.75WC', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PR7BATHMAT', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PR8BT', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'T13066104', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'T130PC', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'T180108110', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'T180608012', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'T18066104', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'T180548012', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'T180788012', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'T18081110', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'T18090110', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'T180PC', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'T180-ZIPPER', proclean_name: 'T-180ZIPPER', uom: 'DZ' },
+  { pk_name: 'T200108110', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'T200548012', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'T200608012', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'T200788012', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'T20081110', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'T20090110', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'T200PC', proclean_name: null, uom: 'DZ' },
+];
+
+// Seed pk_inventory if empty (including initial quantities and shipments from Mateen's sheet)
+async function seedPkInventory() {
+  const existing = await pool.query('SELECT COUNT(*) FROM pk_inventory');
+  if (parseInt(existing.rows[0].count) > 0) return;
+
+  // Seed items with initial quantities from June 2026 inventory count
+  const initialQtys = {
+    '12OZWC':5000,'1414B':0,'1414BL':10,'1414R':50,'1616B':135,'16OZWC':2540,
+    '1818H':15,'1818PW':64,'2.75HT':1320,'4.5BT':790,'6BT':610,'7BATHMAT':150,
+    '8BT':700,'BIBS-BLUE':120,'BIBS-WHT':120,'BLKT2.5':600,'BMT28':1750,
+    'KNITFIT15':50,'KNITFIT19':300,'KNITFIT24':100,'PLT12121HM':800,'PLT16273':370,
+    'PLT20307':130,'PLT2450105':100,'PR10.5BT':900,'PR1WC':17100,'PR3HT':800,
+    'PR5.5BT':2100,'PR6BT':1125,'PR.75WC':9800,'PR7BATHMAT':140,'PR8BT':875,
+  };
+
+  for (const item of PK_ITEMS) {
+    await pool.query(
+      'INSERT INTO pk_inventory (pk_name, proclean_name, uom, qty_in_pakistan) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING',
+      [item.pk_name, item.proclean_name, item.uom, initialQtys[item.pk_name] || 0]
+    );
+  }
+
+  // Seed 3 shipments from Mateen's sheet
+  const shipments = [
+    { name: 'TSI/286', eta: '2026-06-06' },
+    { name: 'TSI/295', eta: '2026-07-06' },
+    { name: 'SF/6410', eta: '2026-07-06' },
+  ];
+
+  const shipmentItems = {
+    'TSI/286': { '12OZWC':2000,'1414B':20,'1616B':45,'1818H':25,'1818PW':16,'4.5BT':200,'16WCBR':1800,'6BTBR':360,'8BTBR':160,'BIBS-BLUE':120,'BIBS-WHT':120,'KNITFIT15':200,'KNITFIT19':200,'PR10.5BT':200,'PR1WC':6000,'PR5.5BT':400,'PR6BT':400,'PR.75WC':2000,'PR8BT':250,'T180PC':500 },
+    'TSI/295': { '12OZWC':2000,'1414B':20,'1616B':45,'1818H':20,'1818PW':16,'4.5BT':350,'16WCBR':900,'6BTBR':150,'8BTBR':180,'BIBS-BLUE':48,'KNITFIT15':130,'KNITFIT19':300,'PR10.5BT':200,'PR1WC':6000,'PR3HT':650,'PR5.5BT':500,'PR6BT':300,'PR.75WC':2000,'PR7BATHMAT':100,'PR8BT':300,'BMT30':400,'T200PC':504 },
+    'SF/6410': { 'T13066104':600,'T130PC':2500,'T180108110':30,'T180608012':30,'T18066104':1000,'T180548012':30,'T180788012':30,'T18081110':30,'T18090110':30,'T180PC':2000,'T180-ZIPPER':300,'T200548012':30,'T200608012':30,'T200788012':30,'T20081110':30,'T20090110':20 },
+  };
+
+  for (const ship of shipments) {
+    const res = await pool.query(
+      'INSERT INTO pk_shipments (name, eta) VALUES ($1,$2) RETURNING id',
+      [ship.name, ship.eta]
+    );
+    const shipId = res.rows[0].id;
+    const items = shipmentItems[ship.name] || {};
+    for (const [pkName, qty] of Object.entries(items)) {
+      if (qty > 0) {
+        await pool.query(
+          'INSERT INTO pk_shipment_items (shipment_id, pk_name, quantity) VALUES ($1,$2,$3) ON CONFLICT (shipment_id, pk_name) DO UPDATE SET quantity=$3',
+          [shipId, pkName, qty]
+        );
+      }
+    }
+  }
+
+  console.log('[PK] Seeded', PK_ITEMS.length, 'items and 3 shipments with initial quantities');
+}
+
+// GET full pakistan inventory view (items + shipments + ATL qty)
+app.get('/api/pk/inventory', async (req, res) => {
+  try {
+    const [itemsRes, shipmentsRes, shipmentItemsRes, atlRes] = await Promise.all([
+      pool.query('SELECT * FROM pk_inventory ORDER BY pk_name ASC'),
+      pool.query('SELECT * FROM pk_shipments ORDER BY created_at ASC'),
+      pool.query('SELECT * FROM pk_shipment_items'),
+      pool.query("SELECT name, sku, qty_on_hand FROM proclean_items WHERE item_type = 'Inventory'"),
+    ]);
+
+    // Build ATL lookup by name and sku
+    const atlMap = {};
+    for (const r of atlRes.rows) {
+      atlMap[r.name.toUpperCase()] = parseFloat(r.qty_on_hand) || 0;
+      if (r.sku) atlMap[r.sku.toUpperCase()] = parseFloat(r.qty_on_hand) || 0;
+    }
+
+    // Build shipment items lookup: shipmentId -> pkName -> qty
+    const shipItemMap = {};
+    for (const si of shipmentItemsRes.rows) {
+      if (!shipItemMap[si.shipment_id]) shipItemMap[si.shipment_id] = {};
+      shipItemMap[si.shipment_id][si.pk_name] = parseFloat(si.quantity) || 0;
+    }
+
+    const items = itemsRes.rows.map(item => {
+      const lookupName = (item.proclean_name || item.pk_name).toUpperCase();
+      const atl_qty = atlMap[lookupName] ?? null;
+      const shipments = shipmentsRes.rows.map(s => ({
+        shipment_id: s.id,
+        qty: shipItemMap[s.id]?.[item.pk_name] || 0
+      }));
+      const total_on_water = shipments.reduce((sum, s) => sum + s.qty, 0);
+      return { ...item, atl_qty, shipments, total_on_water };
+    });
+
+    res.json({ items, shipments: shipmentsRes.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PATCH pakistan qty for an item
+app.patch('/api/pk/inventory/:pkName', async (req, res) => {
+  const { qty_in_pakistan } = req.body;
+  try {
+    await pool.query(
+      'UPDATE pk_inventory SET qty_in_pakistan=$1, last_updated=NOW() WHERE pk_name=$2',
+      [parseFloat(qty_in_pakistan) || 0, req.params.pkName]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET all shipments
+app.get('/api/pk/shipments', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM pk_shipments ORDER BY created_at ASC');
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST create new shipment (max 5)
+app.post('/api/pk/shipments', async (req, res) => {
+  const { name, eta } = req.body;
+  if (!name) return res.status(400).json({ error: 'name required' });
+  try {
+    const count = await pool.query('SELECT COUNT(*) FROM pk_shipments');
+    if (parseInt(count.rows[0].count) >= 5) return res.status(400).json({ error: 'Maximum 5 active shipments allowed' });
+    const result = await pool.query(
+      'INSERT INTO pk_shipments (name, eta) VALUES ($1,$2) RETURNING *',
+      [name, eta || null]
+    );
+    res.json(result.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// DELETE shipment (zero out and remove)
+app.delete('/api/pk/shipments/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM pk_shipments WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PATCH qty for item in a shipment
+app.patch('/api/pk/shipments/:shipmentId/items/:pkName', async (req, res) => {
+  const { quantity } = req.body;
+  const { shipmentId, pkName } = req.params;
+  try {
+    await pool.query(`
+      INSERT INTO pk_shipment_items (shipment_id, pk_name, quantity)
+      VALUES ($1,$2,$3)
+      ON CONFLICT (shipment_id, pk_name) DO UPDATE SET quantity=$3
+    `, [shipmentId, pkName, parseFloat(quantity) || 0]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST zero out entire shipment (all items set to 0) then delete
+app.post('/api/pk/shipments/:id/zero-out', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM pk_shipments WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET export Pakistan inventory as CSV
+app.get('/api/pk/export', async (req, res) => {
+  try {
+    const [itemsRes, shipmentsRes, shipmentItemsRes, atlRes] = await Promise.all([
+      pool.query('SELECT * FROM pk_inventory ORDER BY pk_name ASC'),
+      pool.query('SELECT * FROM pk_shipments ORDER BY created_at ASC'),
+      pool.query('SELECT * FROM pk_shipment_items'),
+      pool.query("SELECT name, sku, qty_on_hand FROM proclean_items WHERE item_type = 'Inventory'"),
+    ]);
+
+    const atlMap = {};
+    for (const r of atlRes.rows) {
+      atlMap[r.name.toUpperCase()] = parseFloat(r.qty_on_hand) || 0;
+      if (r.sku) atlMap[r.sku.toUpperCase()] = parseFloat(r.qty_on_hand) || 0;
+    }
+
+    const shipItemMap = {};
+    for (const si of shipmentItemsRes.rows) {
+      if (!shipItemMap[si.shipment_id]) shipItemMap[si.shipment_id] = {};
+      shipItemMap[si.shipment_id][si.pk_name] = parseFloat(si.quantity) || 0;
+    }
+
+    const shipHeaders = shipmentsRes.rows.map(s => `"${s.name} (ETA: ${s.eta ? new Date(s.eta).toLocaleDateString('en-US') : 'TBD'})"`).join(',');
+    const header = `Item Name,ProClean Name,UOM,Qty in Pakistan,${shipHeaders},Total On Water,Atlanta (ATL) Qty
+`;
+
+    const rows = itemsRes.rows.map(item => {
+      const lookupName = (item.proclean_name || item.pk_name).toUpperCase();
+      const atl = atlMap[lookupName] ?? '';
+      const shipQtys = shipmentsRes.rows.map(s => shipItemMap[s.id]?.[item.pk_name] || 0);
+      const totalOnWater = shipQtys.reduce((a, b) => a + b, 0);
+      return [
+        `"${item.pk_name}"`,
+        `"${item.proclean_name || ''}"`,
+        item.uom,
+        item.qty_in_pakistan || 0,
+        ...shipQtys,
+        totalOnWater,
+        atl
+      ].join(',');
+    }).join('\n');
+
+    const date = new Date().toISOString().split('T')[0];
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="Pakistan_Inventory_${date}.csv"`);
+    res.send(header + rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Serve Production Dashboard (read-only, Pakistan team)
 app.get('/production', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'production.html'));
@@ -1311,6 +1605,7 @@ initDb()
   .then(data => {
     appData = data;
     startProCleanPoller();
+    seedPkInventory();
     app.listen(CONFIG.port, () => {
       console.log(`\n🚀 QBO Inventory Sync running on port ${CONFIG.port}`);
       console.log(`   Dashboard: http://localhost:${CONFIG.port}`);
