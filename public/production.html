@@ -224,6 +224,20 @@
     .form-input-pk { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; color: var(--text); font-size: 13px; outline: none; font-family: var(--font); }
     .form-input-pk:focus { border-color: #555; }
 
+    .pk-table tr.hot-row td { background: #fffbeb !important; }
+    .pk-table tr.hot-row:hover td { background: #fef3c7 !important; }
+    .hot-btn { border: none; border-radius: 5px; padding: 4px 8px; font-size: 11px; font-weight: 700; cursor: pointer; font-family: var(--font); transition: all 0.15s; white-space: nowrap; }
+    .hot-btn.active { background: #f59e0b; color: white; }
+    .hot-btn.inactive { background: var(--surface2); color: var(--text3); border: 1px solid var(--border); }
+    .hot-btn.inactive:hover { border-color: #f59e0b; color: #f59e0b; }
+    .bale-tag { font-size: 9px; font-weight: 700; color: #744210; background: #fef3c7; border: 1px solid #f6ad55; border-radius: 3px; padding: 1px 4px; margin-left: 4px; vertical-align: middle; }
+    .atl-green { color: var(--green); }
+    .atl-orange { color: var(--orange); }
+    .atl-red { color: var(--red); }
+    .notes-input { width: 100%; min-width: 140px; background: var(--surface2); border: 1px solid var(--border); border-radius: 5px; padding: 4px 6px; font-size: 11px; color: var(--text); outline: none; font-family: var(--font); resize: none; height: 32px; }
+    .notes-input:focus { border-color: #555; background: white; height: 60px; }
+    .pk-hot-header { background: #92400e !important; color: white !important; }
+
     /* ── Monthly Summary ── */
     .month-block { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); margin-bottom: 20px; overflow: hidden; box-shadow: var(--shadow); }
     .month-header { padding: 14px 20px; background: var(--surface2); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
@@ -852,13 +866,26 @@ async function renderPakistanStock() {
   }
 }
 
+function getAtlColor(atl_qty, target_stock) {
+  if (atl_qty === null) return 'var(--text3)';
+  if (atl_qty < 0) return 'var(--red)';
+  if (target_stock !== null && target_stock !== undefined) {
+    const pct = atl_qty / target_stock;
+    if (pct >= 1) return 'var(--green)';
+    if (pct >= 0.5) return 'var(--orange)';
+    return 'var(--red)';
+  }
+  return atl_qty === 0 ? 'var(--text3)' : 'var(--green)';
+}
+
 function buildPkTable(data) {
   const { items, shipments } = data;
   const el = document.getElementById('pk-content');
+  const isSafeName = n => n.replace(/[^a-zA-Z0-9._-]/g, '_');
 
   let html = '<div class="pk-table-wrap"><table class="pk-table">';
 
-  // Header row 1
+  // Header
   html += '<thead><tr>';
   html += '<th style="min-width:140px">Item</th>';
   html += '<th style="min-width:50px">UOM</th>';
@@ -867,11 +894,14 @@ function buildPkTable(data) {
     const eta = s.eta ? new Date(s.eta).toLocaleDateString('en-US', {month:'short',day:'numeric',year:'numeric'}) : 'TBD';
     html += `<th class="shipment-header" style="min-width:100px">${s.name}<span class="shipment-eta">ETA: ${eta}</span></th>`;
   });
-  html += '<th style="min-width:90px;text-align:center;background:#f7f7f7">Total On Water</th>';
-  html += '<th style="min-width:90px;text-align:center;background:#ebf8ff;color:#2c5282">ATL Qty</th>';
+  html += '<th style="min-width:80px;text-align:center;background:#f7f7f7">Total On Water</th>';
+  html += '<th style="min-width:80px;text-align:center;background:#ebf8ff;color:#2c5282">ATL Qty</th>';
+  html += '<th style="min-width:90px;text-align:center;background:#f0fff4;color:#276749">Target ATL</th>';
+  html += '<th class="pk-hot-header" style="min-width:70px;text-align:center">🔥 Hot</th>';
+  html += '<th style="min-width:160px">Notes</th>';
   html += '</tr>';
 
-  // Zero out row for shipments
+  // Zero out row
   if (shipments.length > 0) {
     html += '<tr>';
     html += '<td colspan="3" style="border-bottom:1px solid var(--border);background:#fafafa;font-size:11px;color:var(--text3);padding:6px 12px">Zero out when container arrives:</td>';
@@ -880,29 +910,63 @@ function buildPkTable(data) {
     });
     html += '<td style="border-bottom:1px solid var(--border);background:#f7f7f7"></td>';
     html += '<td style="border-bottom:1px solid var(--border);background:#ebf8ff"></td>';
+    html += '<td style="border-bottom:1px solid var(--border);background:#f0fff4"></td>';
+    html += '<td style="border-bottom:1px solid var(--border)"></td>';
+    html += '<td style="border-bottom:1px solid var(--border)"></td>';
     html += '</tr>';
   }
   html += '</thead><tbody>';
 
   // Data rows
   items.forEach(item => {
-    html += '<tr>';
+    const safe = isSafeName(item.pk_name);
+    const hotClass = item.is_hot ? 'hot-row' : '';
+    html += `<tr class="${hotClass}">`;
     html += `<td><span class="pk-name">${item.pk_name}</span>${item.proclean_name ? `<span class="pk-alias">${item.proclean_name}</span>` : ''}</td>`;
     html += `<td><span class="pk-uom">${item.uom}</span></td>`;
-    html += `<td class="pk-qty-cell"><input class="pk-input" type="number" value="${item.qty_in_pakistan||0}" onchange="savePkQty('${item.pk_name}',this.value)" /></td>`;
+
+    // Qty in Pakistan - auto-save on input
+    html += `<td class="pk-qty-cell"><input class="pk-input" type="number" value="${item.qty_in_pakistan||0}" oninput="debounce('pkqty_${safe}',()=>savePkQty('${item.pk_name}',this.value),2000)" /></td>`;
+
+    // Shipment columns
     item.shipments.forEach(s => {
-      html += `<td class="shipment-col pk-qty-cell"><input class="pk-input" type="number" value="${s.qty||0}" onchange="saveShipmentQty(${s.shipment_id},'${item.pk_name}',this.value)" /></td>`;
+      html += `<td class="shipment-col pk-qty-cell"><input class="pk-input" type="number" value="${s.qty||0}" oninput="debounce('ship_${s.shipment_id}_${safe}',()=>saveShipmentQty(${s.shipment_id},'${item.pk_name}',this.value),2000)" /></td>`;
     });
+
+    // Total on water
     const totalColor = item.total_on_water > 0 ? '#2d2d2d' : 'var(--text3)';
     html += `<td style="background:#f7f7f7"><span class="pk-total" style="color:${totalColor}">${item.total_on_water}</span></td>`;
+
+    // ATL Qty with bale tag for 1616B and color coding
     const atlQty = item.atl_qty !== null ? item.atl_qty : '—';
-    const atlColor = item.atl_qty === null ? 'var(--text3)' : item.atl_qty < 0 ? 'var(--red)' : item.atl_qty === 0 ? 'var(--text3)' : 'var(--green)';
-    html += `<td style="background:#ebf8ff"><span class="pk-atl" style="color:${atlColor}">${atlQty}</span></td>`;
+    const atlColor = getAtlColor(item.atl_qty, item.target_stock);
+    const baleTag = item.pk_name === '1616B' ? '<span class="bale-tag">BALE</span>' : '';
+    html += `<td style="background:#ebf8ff"><span class="pk-atl" style="color:${atlColor}">${atlQty}</span>${baleTag}</td>`;
+
+    // Target ATL stock
+    const targetVal = item.target_stock !== null && item.target_stock !== undefined ? item.target_stock : '';
+    html += `<td style="background:#f0fff4"><input class="pk-input" type="number" value="${targetVal}" placeholder="—" oninput="debounce('target_${safe}',()=>savePkTarget('${item.pk_name}',this.value),2000)" /></td>`;
+
+    // Hot toggle
+    const hotActive = item.is_hot ? 'active' : 'inactive';
+    html += `<td style="text-align:center"><button class="hot-btn ${hotActive}" onclick="toggleHot('${item.pk_name}',this)">${item.is_hot ? '🔥 Hot' : 'Mark Hot'}</button></td>`;
+
+    // Notes - auto-save
+    const notesVal = (item.notes || '').replace(/"/g, '&quot;');
+    html += `<td><textarea class="notes-input" placeholder="Add note…" oninput="debounce('notes_${safe}',()=>savePkNotes('${item.pk_name}',this.value),2000)">${item.notes || ''}</textarea></td>`;
+
     html += '</tr>';
   });
 
   html += '</tbody></table></div>';
   el.innerHTML = html;
+}
+
+// ── Debounce helper ──────────────────────────────────────────────────────────
+const debounceTimers = {};
+function debounce(key, fn, delay = 2000) {
+  clearTimeout(debounceTimers[key]);
+  debounceTimers[key] = setTimeout(fn, delay);
 }
 
 async function savePkQty(pkName, value) {
@@ -923,6 +987,43 @@ async function saveShipmentQty(shipmentId, pkName, value) {
       body: JSON.stringify({ quantity: parseFloat(value) || 0 })
     });
   } catch(e) { console.error('Save error:', e); }
+}
+
+async function savePkTarget(pkName, value) {
+  try {
+    await fetch(API + '/api/pk/inventory/' + encodeURIComponent(pkName) + '/target', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_stock: value === '' ? null : parseFloat(value) })
+    });
+  } catch(e) { console.error('Save target error:', e); }
+}
+
+async function savePkNotes(pkName, value) {
+  try {
+    await fetch(API + '/api/pk/inventory/' + encodeURIComponent(pkName) + '/notes', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes: value || null })
+    });
+  } catch(e) { console.error('Save notes error:', e); }
+}
+
+async function toggleHot(pkName, btn) {
+  const isNowHot = btn.classList.contains('inactive');
+  btn.classList.toggle('active', isNowHot);
+  btn.classList.toggle('inactive', !isNowHot);
+  btn.textContent = isNowHot ? '🔥 Hot' : 'Mark Hot';
+  const row = btn.closest('tr');
+  if (isNowHot) row.classList.add('hot-row');
+  else row.classList.remove('hot-row');
+  try {
+    await fetch(API + '/api/pk/inventory/' + encodeURIComponent(pkName) + '/hot', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_hot: isNowHot })
+    });
+  } catch(e) { console.error('Save hot error:', e); }
 }
 
 async function zeroOutShipment(id, name) {
