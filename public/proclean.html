@@ -353,9 +353,9 @@
       display: flex; align-items: center; justify-content: center; gap: 16px;
       border-bottom: 1px solid transparent; flex-wrap: wrap;
     }
-    .token-banner.ok { background: #f0fff4; border-color: #9ae6b4; color: #276749; }
     .token-banner.warn { background: #fffbeb; border-color: #f6ad55; color: #744210; }
     .token-banner.danger { background: #fff5f5; border-color: #fc8181; color: #9b2c2c; animation: blink-border 2s ease-in-out infinite; }
+    .token-banner.critical { background: #faf5ff; border-color: #b794f4; color: #553c9a; animation: blink-border 1.5s ease-in-out infinite; }
     @keyframes blink-border { 0%,100%{opacity:1} 50%{opacity:0.6} }
     .token-item { display: flex; align-items: center; gap: 6px; }
     .token-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
@@ -368,7 +368,7 @@
   </style>
 </head>
 <body>
-<div id="token-banner" class="token-banner ok"><b>QBO Tokens:</b>&nbsp;&nbsp;Loading…</div>
+<div id="token-banner" class="token-banner" style="display:none"></div>
 <div class="app">
   <!-- Sidebar -->
   <aside class="sidebar">
@@ -771,6 +771,17 @@ function setFilter(f, btn) {
 async function openDetail(qboId) {
   showPage('detail');
   currentItem = null;
+  // Reset edit panel immediately so stale data never shows
+  document.getElementById('edit-panel').style.display = 'none';
+  document.getElementById('edit-name').value = '';
+  document.getElementById('edit-qty').value = '';
+  document.getElementById('edit-uom').value = 'EACH';
+  document.getElementById('edit-price').value = '';
+  document.getElementById('edit-cost').value = '';
+  document.getElementById('edit-description').value = '';
+  document.getElementById('edit-note').value = '';
+  document.getElementById('name-check-result').style.display = 'none';
+  document.getElementById('desc-check-result').style.display = 'none';
   document.getElementById('detail-name').textContent = 'Loading…';
   document.getElementById('mov-log').innerHTML = '<div class="loading"><div class="spinner"></div> Loading…</div>';
 
@@ -826,13 +837,20 @@ function renderMovLog(movements, item) {
 // ── Edit ──────────────────────────────────────────────────────────────────────
 function toggleEdit() {
   const panel = document.getElementById('edit-panel');
-  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+  const isOpening = panel.style.display === 'none' || panel.style.display === '';
+  panel.style.display = isOpening ? 'block' : 'none';
   document.getElementById('edit-error').style.display = 'none';
-  if (panel.style.display === 'block' && currentItem) {
+  document.getElementById('name-check-result').style.display = 'none';
+  document.getElementById('desc-check-result').style.display = 'none';
+  if (isOpening && currentItem) {
+    // Always re-populate all fields fresh from currentItem when opening
+    document.getElementById('edit-name').value = currentItem.name || '';
+    document.getElementById('edit-qty').value = parseFloat(currentItem.qty_on_hand) || 0;
     document.getElementById('edit-uom').value = currentItem.uom || 'EACH';
     document.getElementById('edit-price').value = parseFloat(currentItem.unit_price) || '';
     document.getElementById('edit-cost').value = parseFloat(currentItem.purchase_cost) || '';
     document.getElementById('edit-description').value = currentItem.description || '';
+    document.getElementById('edit-note').value = '';
   }
 }
 
@@ -1076,22 +1094,23 @@ async function checkTokenExpiry() {
     const status = await apiFetch('/api/status');
     const companies = status.companies;
     const items = [];
-    let hasWarn = false, hasDanger = false;
+    let hasCritical = false, hasDanger = false, hasWarn = false;
     for (const [key, company] of Object.entries(companies)) {
       if (!company.connected) continue;
       const days = company.tokenExpiresInDays;
-      if (days === null) continue;
-      if (days <= 7) hasDanger = true;
-      else if (days <= 14) hasWarn = true;
-      const dot = days <= 7 ? '🔴' : days <= 14 ? '🟡' : '🟢';
+      if (days === null || days > 14) continue;
+      if (days <= 3) { hasCritical = true; }
+      else if (days <= 7) { hasDanger = true; }
+      else { hasWarn = true; }
+      const dot = days <= 3 ? '🟣' : days <= 7 ? '🔴' : '🟡';
       items.push(`<span class="token-item">${dot}&nbsp;${company.name} — <b>${days}d</b></span>`);
     }
     const banner = document.getElementById('token-banner');
     if (!items.length) { banner.style.display = 'none'; return; }
-    const cls = hasDanger ? 'danger' : hasWarn ? 'warn' : 'ok';
+    const cls = hasCritical ? 'critical' : hasDanger ? 'danger' : 'warn';
     banner.className = 'token-banner ' + cls;
     banner.style.display = 'flex';
-    banner.innerHTML = '<b>QBO Tokens:</b>&nbsp;&nbsp;' +
+    banner.innerHTML = '<b>⚠️ QBO Token Expiring:</b>&nbsp;&nbsp;' +
       items.join(' &nbsp;·&nbsp; ') +
       '&nbsp;&nbsp;&nbsp;Renew at: <a href="/" class="banner-link">qbo-inventory-sync-production.up.railway.app</a>';
   } catch(e) {}
