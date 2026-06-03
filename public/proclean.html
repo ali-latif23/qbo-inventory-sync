@@ -346,12 +346,29 @@
     }
     .btn-danger:hover { background: var(--red); color: white; }
 
+    /* ── Token Banner ── */
+    .token-banner {
+      position: sticky; top: 0; z-index: 100;
+      padding: 7px 20px; font-size: 12px; font-weight: 600;
+      display: flex; align-items: center; justify-content: center; gap: 16px;
+      border-bottom: 1px solid transparent; flex-wrap: wrap;
+    }
+    .token-banner.ok { background: #f0fff4; border-color: #9ae6b4; color: #276749; }
+    .token-banner.warn { background: #fffbeb; border-color: #f6ad55; color: #744210; }
+    .token-banner.danger { background: #fff5f5; border-color: #fc8181; color: #9b2c2c; animation: blink-border 2s ease-in-out infinite; }
+    @keyframes blink-border { 0%,100%{opacity:1} 50%{opacity:0.6} }
+    .token-item { display: flex; align-items: center; gap: 6px; }
+    .token-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .banner-link { color: inherit; text-decoration: underline; font-size: 11px; opacity: 0.8; margin-left: 4px; }
+    .banner-link:hover { opacity: 1; }
+
     /* ── Loading ── */
     .loading { display: flex; align-items: center; justify-content: center; height: 200px; color: var(--text3); font-size: 13px; gap: 8px; }
     .spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.7s linear infinite; }
   </style>
 </head>
 <body>
+<div id="token-banner" class="token-banner ok"><b>QBO Tokens:</b>&nbsp;&nbsp;Loading…</div>
 <div class="app">
   <!-- Sidebar -->
   <aside class="sidebar">
@@ -1053,8 +1070,36 @@ function fmtDate(ts) {
     d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 }
 
+// ── Token Expiry Banner ───────────────────────────────────────────────────
+async function checkTokenExpiry() {
+  try {
+    const status = await apiFetch('/api/status');
+    const companies = status.companies;
+    const items = [];
+    let hasWarn = false, hasDanger = false;
+    for (const [key, company] of Object.entries(companies)) {
+      if (!company.connected) continue;
+      const days = company.tokenExpiresInDays;
+      if (days === null) continue;
+      if (days <= 7) hasDanger = true;
+      else if (days <= 14) hasWarn = true;
+      const dot = days <= 7 ? '🔴' : days <= 14 ? '🟡' : '🟢';
+      items.push(`<span class="token-item">${dot}&nbsp;${company.name} — <b>${days}d</b></span>`);
+    }
+    const banner = document.getElementById('token-banner');
+    if (!items.length) { banner.style.display = 'none'; return; }
+    const cls = hasDanger ? 'danger' : hasWarn ? 'warn' : 'ok';
+    banner.className = 'token-banner ' + cls;
+    banner.style.display = 'flex';
+    banner.innerHTML = '<b>QBO Tokens:</b>&nbsp;&nbsp;' +
+      items.join(' &nbsp;·&nbsp; ') +
+      '&nbsp;&nbsp;&nbsp;Renew at: <a href="/" class="banner-link">qbo-inventory-sync-production.up.railway.app</a>';
+  } catch(e) {}
+}
+
 // ── Init ───────────────────────────────────────────────────────────────────
 loadDashboard();
+checkTokenExpiry();
 </script>
 </body>
 </html>
