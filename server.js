@@ -459,8 +459,10 @@ async function processInvoiceSync(sourceCompanyKey, invoiceId) {
 
       if (updateResult.Item) {
         results.push({ itemName, deducted: qty, from: currentQty, to: newQty });
+        const docDisplay = invoice.DocNumber && invoice.DocNumber !== String(invoiceId) ? `${invoice.DocNumber} (ID:${invoiceId})` : invoiceId;
         log('success', `Inventory updated: "${itemName}" ${currentQty} → ${newQty} (deducted ${qty})`, {
           itemName, currentQty, newQty, qty, invoiceId,
+          docNumber: invoice.DocNumber || invoiceId,
           sourceCompany: sourceCompany.name
         });
         await appInventoryAdjust(itemName, -qty, `invoice:${invoiceId}:${sourceCompany.name}`);
@@ -470,7 +472,11 @@ async function processInvoiceSync(sourceCompanyKey, invoiceId) {
             'UPDATE proclean_items SET qty_on_hand=$1, sync_token=$2, last_synced=NOW(), last_updated_by=$3 WHERE qbo_id=$4',
             [newQty, updateResult.Item.SyncToken, 'invoice:' + sourceCompany.name, masterItem.Id]
           );
-          await pcLogMovement(masterItem.Id, itemName, qty, 'deduction', 'invoice:' + sourceCompany.name, 'Invoice ' + invoiceId + ' from ' + sourceCompany.name);
+          const docNum = invoice.DocNumber ? invoice.DocNumber : invoiceId;
+        const invoiceLabel = invoice.DocNumber && invoice.DocNumber !== String(invoiceId)
+          ? `Invoice ${docNum} (ID:${invoiceId}) from ${sourceCompany.name}`
+          : `Invoice ${invoiceId} from ${sourceCompany.name}`;
+        await pcLogMovement(masterItem.Id, itemName, qty, 'deduction', 'invoice:' + sourceCompany.name, invoiceLabel);
         } catch(e) { console.error('proclean_items update error:', e.message); }
       } else {
         log('error', `Failed to update "${itemName}"`, { updateResult, itemName });
