@@ -1350,7 +1350,7 @@ async function sendResendEmail({ to, cc, subject, html }) {
 
 // POST notify team member from Pakistan stock page
 app.post('/api/pk/notify', async (req, res) => {
-  const { recipient, note, item_name, sender_name } = req.body;
+  const { recipient, note, item_name } = req.body;
   if (!recipient || !note) return res.status(400).json({ error: 'recipient and note required' });
 
   const recipients = {
@@ -1370,7 +1370,7 @@ app.post('/api/pk/notify', async (req, res) => {
       </div>
       <div style="background:#f7fafc;padding:24px;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px">
         <p style="margin:0 0 16px;color:#4a5568;font-size:14px">Hi ${target.name},</p>
-        <p style="margin:0 0 16px;color:#4a5568;font-size:14px">You have received an urgent inventory message${item_name ? ` regarding <strong>${item_name}</strong>` : ''}${sender_name ? ` from ${sender_name}` : ''}:</p>
+        <p style="margin:0 0 16px;color:#4a5568;font-size:14px">You have received an urgent inventory message${item_name ? ` regarding <strong>${item_name}</strong>` : ''}:</p>
         <div style="background:white;border:1px solid #e2e8f0;border-left:4px solid #e53e3e;border-radius:4px;padding:16px;margin:0 0 16px">
           <p style="margin:0;color:#1a202c;font-size:15px;line-height:1.6">${noteHtml}</p>
 /g, '<br>')}</p>
@@ -1430,7 +1430,6 @@ const PK_ITEMS = [
   { pk_name: 'PLT20307', proclean_name: null, uom: 'DZ' },
   { pk_name: 'PLT2450105', proclean_name: null, uom: 'DZ' },
   { pk_name: 'PR105', proclean_name: null, uom: 'DZ' },
-  { pk_name: 'PR10', proclean_name: null, uom: 'DZ' },
   { pk_name: 'PR1', proclean_name: null, uom: 'DZ' },
   { pk_name: 'PR3', proclean_name: null, uom: 'DZ' },
   { pk_name: 'PR55', proclean_name: null, uom: 'DZ' },
@@ -1476,6 +1475,10 @@ async function seedPkInventory() {
       await pool.query('UPDATE pk_shipment_items SET pk_name=$1 WHERE pk_name=$2', [newName, oldName]);
     } catch(e) {} // ignore if already renamed
   }
+
+  // Remove PR10 if it exists (no longer carried)
+  try { await pool.query("DELETE FROM pk_inventory WHERE pk_name = 'PR10'"); } catch(e) {}
+  try { await pool.query("DELETE FROM pk_shipment_items WHERE pk_name = 'PR10'"); } catch(e) {}
 
   // Add HT225 if not exists
   await pool.query(
