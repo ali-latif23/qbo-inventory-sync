@@ -238,6 +238,40 @@
     .notes-input:focus { border-color: #555; background: white; height: 60px; }
     .pk-hot-header { background: #92400e !important; color: white !important; }
 
+    /* ── Notify buttons ── */
+    .notes-wrap { position: relative; }
+    .notify-btns { display: none; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+    .notes-input:focus ~ .notify-btns, .notify-btns:focus-within { display: flex; }
+    .notes-wrap:focus-within .notify-btns { display: flex; }
+    .notify-btn { border: none; border-radius: 4px; padding: 4px 8px; font-size: 10px; font-weight: 700; cursor: pointer; font-family: var(--font); transition: all 0.15s; }
+    .notify-nihad { background: #ebf8ff; color: #2c5282; border: 1px solid #bee3f8; }
+    .notify-nihad:hover { background: #2c5282; color: white; }
+    .notify-mateen { background: #f0fff4; color: #276749; border: 1px solid #9ae6b4; }
+    .notify-mateen:hover { background: #276749; color: white; }
+    .notify-sending { opacity: 0.6; cursor: not-allowed; }
+    .notify-sent { background: #c6f6d5 !important; color: #276749 !important; }
+
+    /* ── Mobile / Landscape improvements ── */
+    @media (max-width: 900px) {
+      .sidebar { width: 52px; min-width: 52px; }
+      .sidebar-top { padding: 12px 8px; }
+      .sidebar-logo span, .sidebar-sub, .live-badge span:last-child, .last-sync-txt { display: none; }
+      .sidebar-logo { justify-content: center; }
+      .nav-item { padding: 10px; justify-content: center; }
+      .nav-item span { display: none; }
+      .sidebar-footer { padding: 8px; }
+      .live-dot { margin: 0 auto; }
+      .main { padding: 16px 14px; }
+      .stat-grid { grid-template-columns: repeat(2,1fr); gap: 10px; margin-bottom: 16px; }
+      .stat-value { font-size: 22px; }
+      .dash-grid { grid-template-columns: 1fr; gap: 14px; }
+      .chart-wrap { height: 200px; }
+      .page-title { font-size: 18px; }
+      .page-header { flex-wrap: wrap; gap: 8px; }
+      .pk-toolbar { flex-direction: column; align-items: flex-start; }
+      .chart-tabs { flex-wrap: wrap; }
+    }
+
     /* ── Monthly Summary ── */
     .month-block { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); margin-bottom: 20px; overflow: hidden; box-shadow: var(--shadow); }
     .month-header { padding: 14px 20px; background: var(--surface2); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
@@ -951,9 +985,14 @@ function buildPkTable(data) {
     const hotActive = item.is_hot ? 'active' : 'inactive';
     html += `<td style="text-align:center"><button class="hot-btn ${hotActive}" onclick="toggleHot('${item.pk_name}',this)">${item.is_hot ? '🔥 Hot' : 'Mark Hot'}</button></td>`;
 
-    // Notes - auto-save
-    const notesVal = (item.notes || '').replace(/"/g, '&quot;');
-    html += `<td><textarea class="notes-input" placeholder="Add note…" oninput="debounce('notes_${safe}',()=>savePkNotes('${item.pk_name}',this.value),2000)">${item.notes || ''}</textarea></td>`;
+    // Notes with notify buttons
+    html += `<td><div class="notes-wrap">
+      <textarea class="notes-input" id="notes_${safe}" placeholder="Add note…" oninput="debounce('notes_${safe}',()=>savePkNotes('${item.pk_name}',this.value),2000)">${item.notes || ''}</textarea>
+      <div class="notify-btns">
+        <button class="notify-btn notify-nihad" onclick="sendNotify('nihad','${item.pk_name}','notes_${safe}',this)">📧 Notify Nihad Immediately</button>
+        <button class="notify-btn notify-mateen" onclick="sendNotify('mateen','${item.pk_name}','notes_${safe}',this)">📧 Notify Mateen Immediately</button>
+      </div>
+    </div></td>`;
 
     html += '</tr>';
   });
@@ -1061,6 +1100,40 @@ async function addShipment() {
     hideAddShipment();
     renderPakistanStock();
   } catch(e) { errEl.textContent = e.message; errEl.style.display = 'block'; }
+}
+
+// ── Notify ───────────────────────────────────────────────────────────────────
+async function sendNotify(recipient, itemName, notesFieldId, btn) {
+  const note = document.getElementById(notesFieldId)?.value?.trim();
+  if (!note) { alert('Please write a note first before notifying.'); return; }
+  btn.classList.add('notify-sending');
+  btn.textContent = 'Sending…';
+  try {
+    const res = await fetch(API + '/api/pk/notify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipient, note, item_name: itemName, sender_name: 'Pakistan Team' })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      btn.classList.remove('notify-sending');
+      btn.classList.add('notify-sent');
+      btn.textContent = '✓ Sent!';
+      setTimeout(() => {
+        btn.classList.remove('notify-sent');
+        btn.textContent = recipient === 'nihad' ? '📧 Notify Nihad Immediately' : '📧 Notify Mateen Immediately';
+      }, 3000);
+    } else {
+      btn.classList.remove('notify-sending');
+      btn.textContent = '✗ Failed';
+      setTimeout(() => { btn.textContent = recipient === 'nihad' ? '📧 Notify Nihad Immediately' : '📧 Notify Mateen Immediately'; }, 3000);
+      alert('Failed to send: ' + (data.error || 'Unknown error'));
+    }
+  } catch(e) {
+    btn.classList.remove('notify-sending');
+    btn.textContent = '✗ Error';
+    setTimeout(() => { btn.textContent = recipient === 'nihad' ? '📧 Notify Nihad Immediately' : '📧 Notify Mateen Immediately'; }, 3000);
+  }
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────
