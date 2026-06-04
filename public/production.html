@@ -13,6 +13,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="/auth.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -42,7 +44,7 @@
       --shadow: 0 1px 3px rgba(0,0,0,0.08);
       --shadow-md: 0 4px 6px rgba(0,0,0,0.06);
     }
-    html, body { height: 100%; font-family: var(--font); background: var(--bg); color: var(--text); font-size: 14px; -webkit-font-smoothing: antialiased; }
+    html, body { height: 100%; font-family: var(--font); background: var(--bg); color: var(--text); font-size: 14px; -webkit-font-smoothing: antialiased; visibility: hidden; }
     button { cursor: pointer; font-family: inherit; }
     input { font-family: inherit; }
     ::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
@@ -328,6 +330,7 @@
     <div class="sidebar-footer">
       <div class="live-badge"><div class="live-dot"></div> Live — Atlanta Warehouse</div>
       <div class="last-sync-txt" id="last-sync">Loading…</div>
+      <button onclick="signOut()" style="width:100%;margin-top:10px;padding:7px 12px;background:transparent;border:1px solid rgba(255,255,255,0.15);color:rgba(255,255,255,0.4);border-radius:8px;font-size:11px;font-family:inherit;cursor:pointer;text-align:left">Sign Out</button>
     </div>
   </aside>
 
@@ -1137,8 +1140,11 @@ async function sendNotify(recipient, itemName, notesFieldId, btn) {
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────
-load();
-setInterval(load, 5 * 60 * 1000);
+(async function () {
+  await requireAuth(['admin', 'production']);
+  load();
+  setInterval(load, 5 * 60 * 1000);
+})();
 </script>
 </body>
 </html>

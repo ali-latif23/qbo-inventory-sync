@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>QBO Inventory Sync</title>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="/auth.js"></script>
   <style>
     :root {
       --bg: #0a0c10;
@@ -30,6 +32,7 @@
       color: var(--text);
       font-family: var(--sans);
       min-height: 100vh;
+      visibility: hidden;
     }
 
     /* Grid noise texture */
@@ -486,6 +489,7 @@
         <div class="live-dot"></div>
         LIVE
       </div>
+      <button onclick="signOut()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:5px 14px;border-radius:6px;font-family:var(--mono);font-size:11px;cursor:pointer;letter-spacing:0.05em">Sign Out</button>
     </div>
   </header>
 
@@ -731,9 +735,12 @@
     window.history.replaceState({}, '', '/');
   }
 
-  // Load and auto-refresh every 15s
-  loadData();
-  setInterval(loadData, 15000);
+  // Load and auto-refresh every 15s (only after auth is confirmed)
+  (async function () {
+    await requireAuth(['admin']);
+    loadData();
+    setInterval(loadData, 15000);
+  })();
 </script>
 </body>
 </html>

@@ -3,6 +3,12 @@ const crypto = require('crypto');
 const fetch = (...args) => import('node-fetch').then(({ default: f }) => f(...args));
 const path = require('path');
 const { Pool } = require('pg');
+const { createClient } = require('@supabase/supabase-js');
+
+const supabaseAdmin = createClient(
+  'https://phyxlpdfvruyigmpdqqi.supabase.co',
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 const app = express();
 
@@ -197,6 +203,24 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Raw body for webhook verification
 app.use('/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
+
+// ─── API AUTH MIDDLEWARE ──────────────────────────────────────────────────────
+// Every /api/* request must carry a valid Supabase JWT.
+// Non-API routes (/webhook, /connect, /callback, /eula, /privacy, static files)
+// are unaffected — they don't match this path prefix.
+app.use('/api', async (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Missing authorization token' });
+  }
+  const token = authHeader.slice(7);
+  const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+  if (error || !user) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+  req.user = user;
+  next();
+});
 
 // ─── HELPERS ────────────────────────────────────────────────────────────────
 function log(type, message, details = {}) {
