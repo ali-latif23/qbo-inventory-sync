@@ -391,15 +391,30 @@ async function processInvoiceSync(sourceCompanyKey, invoiceId) {
   const sourceCompany = appData.companies[sourceCompanyKey];
   if (!sourceCompany) throw new Error(`Unknown company: ${sourceCompanyKey}`);
 
-  // Don't sync from master company (Company 1) - it IS the inventory source
-  // Actually we DO want to deduct even from Company 1 invoices
-  // but the inventory lives in Company 1 so it self-updates
-
   log('info', `Processing invoice ${invoiceId} from ${sourceCompany.name}`, { sourceCompanyKey, invoiceId });
 
   const invoice = await getInvoiceWithRetry(sourceCompanyKey, invoiceId);
   if (!invoice) throw new Error(`Invoice ${invoiceId} not found - may not be accessible via API yet`);
   if (invoice.status === 'Void' || invoice.PrivateNote?.includes('__synced__')) return;
+
+  // ── Date guard: skip invoices older than 7 days ──────────────────────────
+  // Prevents replayed/historical webhooks from incorrectly deducting stock.
+  // QBO sometimes replays old webhook events during app restarts or outages.
+  const txnDate = invoice.TxnDate; // format: "YYYY-MM-DD"
+  if (txnDate) {
+    const invoiceAge = (Date.now() - new Date(txnDate).getTime()) / (1000 * 60 * 60 * 24);
+    if (invoiceAge > 7) {
+      log('warning', `Invoice ${invoiceId} from ${sourceCompany.name} is ${Math.floor(invoiceAge)} days old — skipping to prevent replay`, { invoiceId, txnDate, ageInDays: Math.floor(invoiceAge) });
+      return;
+    }
+  }
+
+  // ── Verify invoice ID matches what we requested ──────────────────────────
+  // Guards against QBO returning a different invoice than requested.
+  if (invoice.Id && invoice.Id !== String(invoiceId)) {
+    log('error', `Invoice ID mismatch: requested ${invoiceId}, got ${invoice.Id} — skipping`, { invoiceId, returnedId: invoice.Id });
+    return;
+  }
 
   const lineItems = invoice.Line?.filter(l => l.DetailType === 'SalesItemLineDetail') || [];
   if (lineItems.length === 0) {
@@ -414,8 +429,12 @@ async function processInvoiceSync(sourceCompanyKey, invoiceId) {
     const itemRef = detail?.ItemRef;
     if (!itemRef) continue;
 
-    const qtyToDeduct = line.Amount / (detail.UnitPrice || 1);
-    const qty = detail.Qty || qtyToDeduct;
+    // Use Qty directly — never fall back to Amount/Price calculation which can be wildly wrong
+    const qty = detail.Qty;
+    if (!qty || qty <= 0) {
+      log('warning', `Invoice ${invoiceId} line item has invalid qty: ${qty} — skipping`, { itemName: itemRef.name, qty });
+      continue;
+    }
     const itemName = itemRef.name;
 
     try {
@@ -1397,7 +1416,6 @@ app.post('/api/pk/notify', async (req, res) => {
         <p style="margin:0 0 16px;color:#4a5568;font-size:14px">You have received an urgent inventory message${item_name ? ` regarding <strong>${item_name}</strong>` : ''}:</p>
         <div style="background:white;border:1px solid #e2e8f0;border-left:4px solid #e53e3e;border-radius:4px;padding:16px;margin:0 0 16px">
           <p style="margin:0;color:#1a202c;font-size:15px;line-height:1.6">${noteHtml}</p>
-/g, '<br>')}</p>
         </div>
         <p style="margin:0;color:#a0aec0;font-size:12px">Sent via ProClean Inventory Tracking System · ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} ET</p>
       </div>
