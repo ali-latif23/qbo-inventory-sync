@@ -1320,26 +1320,29 @@ app.get('/proclean/*', (req, res) => {
 
 // ─── EMAIL NOTIFICATIONS (Resend) ────────────────────────────────────────────
 
+const nodemailer = require('nodemailer');
+
+function getMailTransporter() {
+  return nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: '23alilatif@gmail.com',
+      pass: process.env.GMAIL_APP_PASSWORD,
+    }
+  });
+}
+
 async function sendResendEmail({ to, cc, subject, html }) {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) { console.error('RESEND_API_KEY not set'); return false; }
+  if (!process.env.GMAIL_APP_PASSWORD) { console.error('GMAIL_APP_PASSWORD not set'); return false; }
   try {
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer ' + apiKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: 'ProClean Alerts <onboarding@resend.dev>',
-        to: Array.isArray(to) ? to : [to],
-        cc: cc ? (Array.isArray(cc) ? cc : [cc]) : undefined,
-        subject,
-        html,
-      })
+    const transporter = getMailTransporter();
+    await transporter.sendMail({
+      from: 'ProClean Alerts <23alilatif@gmail.com>',
+      to: Array.isArray(to) ? to.join(',') : to,
+      cc: cc ? (Array.isArray(cc) ? cc.join(',') : cc) : undefined,
+      subject,
+      html,
     });
-    const data = await res.json();
-    if (!res.ok) { console.error('Resend error:', JSON.stringify(data)); return false; }
     console.log('[Email] Sent to', to);
     return true;
   } catch(err) {
