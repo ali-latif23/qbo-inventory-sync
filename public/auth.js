@@ -78,8 +78,11 @@
       return new Promise(function () {});
     }
 
-    // Auth passed — reveal the page and return the user
-    document.body.style.visibility = '';
+    // Auth passed — reveal the page and return the user.
+    // Must use 'visible' (not '') because '' just removes the inline style,
+    // leaving the CSS rule `body { visibility: hidden }` still active.
+    document.documentElement.style.visibility = 'visible';
+    document.body.style.visibility = 'visible';
     return {
       id:       session.user.id,
       email:    session.user.email,
