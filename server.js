@@ -1318,6 +1318,79 @@ app.get('/proclean/*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'proclean.html'));
 });
 
+// ─── EMAIL NOTIFICATIONS (Resend) ────────────────────────────────────────────
+
+async function sendResendEmail({ to, cc, subject, html }) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) { console.error('RESEND_API_KEY not set'); return false; }
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + apiKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: 'ProClean Alerts <onboarding@resend.dev>',
+        to: Array.isArray(to) ? to : [to],
+        cc: cc ? (Array.isArray(cc) ? cc : [cc]) : undefined,
+        subject,
+        html,
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) { console.error('Resend error:', JSON.stringify(data)); return false; }
+    console.log('[Email] Sent to', to);
+    return true;
+  } catch(err) {
+    console.error('[Email] Error:', err.message);
+    return false;
+  }
+}
+
+// POST notify team member from Pakistan stock page
+app.post('/api/pk/notify', async (req, res) => {
+  const { recipient, note, item_name, sender_name } = req.body;
+  if (!recipient || !note) return res.status(400).json({ error: 'recipient and note required' });
+
+  const recipients = {
+    nihad: { email: 'nihad@procleanofatl.com', name: 'Nihad' },
+    mateen: { email: 'mateen@procleanofatl.com', name: 'Abdul Mateen' },
+  };
+
+  const target = recipients[recipient];
+  if (!target) return res.status(400).json({ error: 'Invalid recipient' });
+
+  const noteHtml = (note || '').split('\n').join('<br>');
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+      <div style="background:#2c5282;padding:20px 24px;border-radius:8px 8px 0 0">
+        <h2 style="color:white;margin:0;font-size:18px">⚠️ Urgent Inventory Message</h2>
+        <p style="color:#bee3f8;margin:4px 0 0;font-size:13px">ProClean Inventory System</p>
+      </div>
+      <div style="background:#f7fafc;padding:24px;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px">
+        <p style="margin:0 0 16px;color:#4a5568;font-size:14px">Hi ${target.name},</p>
+        <p style="margin:0 0 16px;color:#4a5568;font-size:14px">You have received an urgent inventory message${item_name ? ` regarding <strong>${item_name}</strong>` : ''}${sender_name ? ` from ${sender_name}` : ''}:</p>
+        <div style="background:white;border:1px solid #e2e8f0;border-left:4px solid #e53e3e;border-radius:4px;padding:16px;margin:0 0 16px">
+          <p style="margin:0;color:#1a202c;font-size:15px;line-height:1.6">${noteHtml}</p>
+/g, '<br>')}</p>
+        </div>
+        <p style="margin:0;color:#a0aec0;font-size:12px">Sent via ProClean Inventory Tracking System · ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} ET</p>
+      </div>
+    </div>
+  `;
+
+  const ok = await sendResendEmail({
+    to: target.email,
+    cc: ['23alilatif@gmail.com', 'ylatif@procleanofatl.com'],
+    subject: `URGENT INVENTORY MESSAGE${item_name ? ' — ' + item_name : ''}`,
+    html,
+  });
+
+  if (ok) res.json({ ok: true });
+  else res.status(500).json({ error: 'Failed to send email' });
+});
+
 // ─── PAKISTAN INVENTORY API ──────────────────────────────────────────────────
 
 const PK_ITEMS = [
@@ -1357,7 +1430,7 @@ const PK_ITEMS = [
   { pk_name: 'PLT20307', proclean_name: null, uom: 'DZ' },
   { pk_name: 'PLT2450105', proclean_name: null, uom: 'DZ' },
   { pk_name: 'PR105', proclean_name: null, uom: 'DZ' },
-  { pk_name: 'PR10BT', proclean_name: null, uom: 'DZ' },
+  { pk_name: 'PR10', proclean_name: null, uom: 'DZ' },
   { pk_name: 'PR1', proclean_name: null, uom: 'DZ' },
   { pk_name: 'PR3', proclean_name: null, uom: 'DZ' },
   { pk_name: 'PR55', proclean_name: null, uom: 'DZ' },
@@ -1395,7 +1468,7 @@ async function seedPkInventory() {
     ['7BATHMAT','BM7'],['10BT','BT10'],['4.5BT','BT45'],['5BT','BT5'],
     ['6BT','BT6'],['8BT','BT8'],['PR1WC','PR1'],['PR.75WC','PR75'],
     ['PR3HT','PR3'],['PR5.5BT','PR55'],['PR6BT','PR6'],['PR7BATHMAT','PR7'],
-    ['PR8BT','PR8'],['PR10.5BT','PR105'],['5.5BT','BT55'],
+    ['PR8BT','PR8'],['PR10BT','PR10'],['PR10.5BT','PR105'],['5.5BT','BT55'],
   ];
   for (const [oldName, newName] of renames) {
     try {
