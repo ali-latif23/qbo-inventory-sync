@@ -489,11 +489,11 @@
             <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
             Export to Excel
           </a>
-          <label class="btn-dark" style="cursor:pointer;display:flex;align-items:center;gap:7px">
+          <button class="btn-dark" style="display:flex;align-items:center;gap:7px" onclick="showPkUploadInstructions()">
             <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l4-4m0 0l4 4m-4-4v12"/></svg>
             Upload CSV
-            <input type="file" accept=".csv" style="display:none" onchange="handlePkUpload(event)" />
-          </label>
+          </button>
+          <input type="file" accept=".csv" id="pk-file-input" style="display:none" onchange="handlePkUpload(event)" />
         </div>
       </div>
       <div class="pk-toolbar">
@@ -1153,6 +1153,47 @@ async function sendNotify(recipient, itemName, notesFieldId, btn) {
   setInterval(load, 5 * 60 * 1000);
 })();
 </script>
+<!-- Upload Instructions Modal (Pakistan) -->
+<div id="upload-instructions-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:300;align-items:center;justify-content:center">
+  <div style="background:white;border-radius:12px;width:640px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 40px rgba(0,0,0,0.15)">
+    <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+      <div style="font-size:15px;font-weight:700">How to Use Bulk Upload</div>
+      <button onclick="closeUploadInstructions()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3)">x</button>
+    </div>
+    <div style="padding:20px 22px;overflow-y:auto;flex:1;font-size:13px;line-height:1.7;color:var(--text)">
+      <div style="background:#f5f5f5;border:1px solid #ccc;border-radius:8px;padding:12px 16px;margin-bottom:16px;color:#2d2d2d;font-size:13px;">
+        <strong>Step 1:</strong> Click <strong>Export to Excel</strong> first to download the current Pakistan inventory as a CSV file.
+      </div>
+      <div style="background:#f0fff4;border:1px solid #9ae6b4;border-radius:8px;padding:12px 16px;margin-bottom:16px;color:#276749;font-size:13px;">
+        <strong>Step 2:</strong> Open the CSV in Excel or Google Sheets. Edit the values you want to change. <strong>Do not change the Item Name column</strong> — it is used to match rows during upload.
+      </div>
+      <div style="font-weight:600;margin-bottom:8px;">What you can edit:</div>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12px;">
+        <thead><tr style="background:#f5f5f5">
+          <th style="padding:7px 10px;text-align:left;border:1px solid var(--border)">Column</th>
+          <th style="padding:7px 10px;text-align:left;border:1px solid var(--border)">What it does</th>
+        </tr></thead>
+        <tbody>
+          <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Qty in Pakistan</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the quantity currently in Pakistan warehouse</td></tr>
+          <tr style="background:#f9f9f9"><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Target ATL Stock</td><td style="padding:7px 10px;border:1px solid var(--border)">Sets the target quantity for Atlanta — used for color-coded status</td></tr>
+          <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Shipment columns</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates qty for each active shipment on water — column header shows shipment name and ETA</td></tr>
+          <tr style="background:#f9f9f9"><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Hot Item</td><td style="padding:7px 10px;border:1px solid var(--border)">Type YES to mark as hot item, leave blank or type NO to unmark</td></tr>
+          <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Notes</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the notes field for that item</td></tr>
+        </tbody>
+      </table>
+      <div style="background:#fffbeb;border:1px solid #f6ad55;border-radius:8px;padding:12px 16px;margin-bottom:16px;color:#744210;font-size:12px;">
+        <strong>Important:</strong> Only rows with changed values will be updated. You will see a preview of all detected changes before anything is saved — review carefully before confirming. The ATL Qty column is read-only and cannot be changed via upload.
+      </div>
+      <div style="font-weight:600;margin-bottom:6px;">Do NOT change these columns:</div>
+      <div style="font-size:12px;color:var(--text2)">Item Name, ProClean Name, UOM, Total On Water, Atlanta (ATL) Qty — these are read-only. Changing Item Name will cause rows to not be found during upload.</div>
+    </div>
+    <div style="padding:14px 22px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px">
+      <button class="btn-outline" onclick="closeUploadInstructions()">Cancel</button>
+      <button class="btn-dark" onclick="openPkFilePicker()">Got it — Choose File</button>
+    </div>
+  </div>
+</div>
+
 <!-- Bulk Upload Modal -->
 <div id="bulk-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:300;align-items:center;justify-content:center">
   <div style="background:white;border-radius:12px;width:700px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 40px rgba(0,0,0,0.15)">
@@ -1168,6 +1209,10 @@ async function sendNotify(recipient, itemName, notesFieldId, btn) {
   </div>
 </div>
 <script>
+function showPkUploadInstructions() { document.getElementById('upload-instructions-modal').style.display='flex'; }
+function closeUploadInstructions() { document.getElementById('upload-instructions-modal').style.display='none'; }
+function openPkFilePicker() { closeUploadInstructions(); document.getElementById('pk-file-input').click(); }
+
 let pendingBulkChanges=[];
 function parseCsv(text){const lines=text.trim().split('\n');const headers=lines[0].split(',').map(h=>h.replace(/"/g,'').trim().toLowerCase().replace(/ /g,'_').replace(/[(]/g,'').replace(/[)]/g,''));return lines.slice(1).map(line=>{const vals=[];let cur='',inQ=false;for(const ch of line){if(ch==='"')inQ=!inQ;else if(ch===','&&!inQ){vals.push(cur.trim());cur='';}else cur+=ch;}vals.push(cur.trim());const row={};headers.forEach((h,i)=>row[h]=vals[i]||'');return row;});}
 async function handlePkUpload(event){const file=event.target.files[0];if(!file)return;const text=await file.text();const rawRows=parseCsv(text);const rows=rawRows.map(r=>{const row={pk_name:r.item_name||r.pk_name||'',qty_in_pakistan:r.qty_in_pakistan!==''?r.qty_in_pakistan:undefined,target_stock:r.target_atl_stock!==''?r.target_atl_stock:undefined,notes:r.notes!==''?r.notes:undefined,is_hot:r.hot_item!==''?r.hot_item:undefined};if(pkData&&pkData.shipments){for(const ship of pkData.shipments){const sn=ship.name.toLowerCase().replace(/\//g,'_').replace(/[^a-z0-9_]/g,'');const key=Object.keys(r).find(k=>k.includes(sn));if(key&&r[key]!=='')row['shipment_'+ship.name]=r[key];}}return row;});event.target.value='';try{const res=await fetch(API+'/api/pk/bulk-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows})}).then(r=>r.json());showBulkModal(res.changes,'pakistan');}catch(e){alert('Error: '+e.message);}}
