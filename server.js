@@ -1389,7 +1389,7 @@ app.post('/api/proclean/bulk-preview', async (req, res) => {
       if (row.qty_on_hand!==undefined&&row.qty_on_hand!==''&&parseFloat(row.qty_on_hand)!==parseFloat(item.qty_on_hand)) fc.fields.push({ field:'qty_on_hand', label:'Qty', current:parseFloat(item.qty_on_hand), new:parseFloat(row.qty_on_hand) });
       if (row.unit_price!==undefined&&row.unit_price!==''&&parseFloat(row.unit_price)!==parseFloat(item.unit_price)) fc.fields.push({ field:'unit_price', label:'Sale Price', current:parseFloat(item.unit_price), new:parseFloat(row.unit_price) });
       if (row.purchase_cost!==undefined&&row.purchase_cost!==''&&parseFloat(row.purchase_cost)!==parseFloat(item.purchase_cost)) fc.fields.push({ field:'purchase_cost', label:'Cost Price', current:parseFloat(item.purchase_cost), new:parseFloat(row.purchase_cost) });
-      if (row.uom!==undefined&&row.uom!==''&&row.uom!==item.uom) fc.fields.push({ field:'uom', label:'UOM', current:item.uom, new:row.uom });
+
       if (row.description!==undefined&&row.description!==''&&row.description!==(item.description||'')) fc.fields.push({ field:'description', label:'Description', current:item.description||'', new:row.description });
       if (fc.fields.length > 0) { fc.status = 'changed'; changes.push(fc); }
     }
@@ -1424,21 +1424,15 @@ app.post('/api/proclean/bulk-apply', async (req, res) => {
         const qd = await qboGet('company1','item/'+item.qbo_id);
         if (qd.Item) { const co=appData.companies['company1'],tk=await getAccessToken('company1'); const r=await fetch(`${QBO_BASE}/${co.realmId}/item`,{method:'POST',headers:{'Authorization':'Bearer '+tk,'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({...qd.Item,PurchaseCost:fm.purchase_cost})}); const rd=await r.json(); if(!rd.Fault) await pool.query('UPDATE proclean_items SET purchase_cost=$1,sync_token=$2 WHERE qbo_id=$3',[fm.purchase_cost,rd.Item.SyncToken,item.qbo_id]); }
       }
-      if (fm.uom!==undefined||fm.description!==undefined) {
+      if (fm.description!==undefined) {
         const qd=await qboGet('company1','item/'+item.qbo_id);
         if (qd.Item) {
-          const ub={...qd.Item}; if(fm.description!==undefined) ub.Description=fm.description;
+          const ub={...qd.Item,Description:fm.description};
           const co1=appData.companies['company1'],tk1=await getAccessToken('company1');
           await fetch(`${QBO_BASE}/${co1.realmId}/item`,{method:'POST',headers:{'Authorization':'Bearer '+tk1,'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify(ub)});
-          if (fm.description!==undefined) {
-            for (const ck of ['company2','company3']) { const co=appData.companies[ck]; if(!co?.tokens) continue; try { const enc=encodeURIComponent(`SELECT * FROM Item WHERE Name = '${item.name.replace(/'/g,"\'")}' `); const sr=await qboGet(ck,`query?query=${enc}`); const fi=sr.QueryResponse?.Item?.[0]; if(fi){const tk=await getAccessToken(ck);await fetch(`${QBO_BASE}/${co.realmId}/item`,{method:'POST',headers:{'Authorization':'Bearer '+tk,'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({...fi,Description:fm.description})});} } catch(e){} }
-          }
+          for (const ck of ['company2','company3']) { const co=appData.companies[ck]; if(!co?.tokens) continue; try { const enc=encodeURIComponent(`SELECT * FROM Item WHERE Name = '${item.name.replace(/'/g,"\'")}' `); const sr=await qboGet(ck,`query?query=${enc}`); const fi=sr.QueryResponse?.Item?.[0]; if(fi){const tk=await getAccessToken(ck);await fetch(`${QBO_BASE}/${co.realmId}/item`,{method:'POST',headers:{'Authorization':'Bearer '+tk,'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({...fi,Description:fm.description})});} } catch(e){} }
         }
-        const ups=[],vs=[]; let ix=1;
-        if(fm.uom!==undefined){ups.push(`uom=$${ix++}`);vs.push(fm.uom);}
-        if(fm.description!==undefined){ups.push(`description=$${ix++}`);vs.push(fm.description);}
-        ups.push(`last_updated_by=$${ix++}`);vs.push('bulk_upload');vs.push(item.qbo_id);
-        await pool.query(`UPDATE proclean_items SET ${ups.join(',')} WHERE qbo_id=$${ix}`,vs);
+        await pool.query('UPDATE proclean_items SET description=$1,last_updated_by=$2 WHERE qbo_id=$3',[fm.description,'bulk_upload',item.qbo_id]);
       }
       results.success++;
     } catch(err) { results.failed++; results.errors.push(change.name+': '+err.message); }
