@@ -1800,6 +1800,72 @@ app.get('/api/pk/export', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Export routes outside auth middleware (browser download links can't send JWT headers)
+app.get('/export/proclean', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT name, sku, uom, qty_on_hand, unit_price, purchase_cost,
+             (qty_on_hand * unit_price) as sale_value,
+             (qty_on_hand * purchase_cost) as cost_value,
+             last_synced, last_updated_by
+      FROM proclean_items WHERE item_type = 'Inventory' ORDER BY name ASC
+    `);
+    const header = 'Item Name,SKU,UOM,Qty On Hand,Sale Price,Cost Price,Sale Value,Cost Value,Last Synced,Last Updated By\n';
+    const rows = result.rows.map(r => [
+      `"${(r.name||'').replace(/"/g,'""')}"`,
+      `"${(r.sku||'').replace(/"/g,'""')}"`,
+      r.uom || '',
+      r.qty_on_hand || 0,
+      parseFloat(r.unit_price || 0).toFixed(2),
+      parseFloat(r.purchase_cost || 0).toFixed(2),
+      parseFloat(r.sale_value || 0).toFixed(2),
+      parseFloat(r.cost_value || 0).toFixed(2),
+      r.last_synced ? new Date(r.last_synced).toLocaleString('en-US', { timeZone: 'America/New_York' }) : '',
+      r.last_updated_by || ''
+    ].join(',')).join('\n');
+    const date = new Date().toISOString().split('T')[0];
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="ProClean_Inventory_${date}.csv"`);
+    res.send(header + rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/export/pakistan', async (req, res) => {
+  try {
+    const [itemsRes, shipmentsRes, shipmentItemsRes, atlRes] = await Promise.all([
+      pool.query('SELECT * FROM pk_inventory ORDER BY pk_name ASC'),
+      pool.query('SELECT * FROM pk_shipments ORDER BY created_at ASC'),
+      pool.query('SELECT * FROM pk_shipment_items'),
+      pool.query("SELECT name, sku, qty_on_hand FROM proclean_items WHERE item_type = 'Inventory'"),
+    ]);
+    const atlMap = {};
+    for (const r of atlRes.rows) {
+      atlMap[r.name.toUpperCase()] = parseFloat(r.qty_on_hand) || 0;
+      if (r.sku) atlMap[r.sku.toUpperCase()] = parseFloat(r.qty_on_hand) || 0;
+    }
+    const shipItemMap = {};
+    for (const si of shipmentItemsRes.rows) {
+      if (!shipItemMap[si.shipment_id]) shipItemMap[si.shipment_id] = {};
+      shipItemMap[si.shipment_id][si.pk_name] = parseFloat(si.quantity) || 0;
+    }
+    const shipHeaders = shipmentsRes.rows.map(s => `"${s.name} (ETA: ${s.eta ? new Date(s.eta).toLocaleDateString('en-US') : 'TBD'})"`).join(',');
+    const header = `Item Name,ProClean Name,UOM,Qty in Pakistan,${shipHeaders},Total On Water,Atlanta (ATL) Qty,Target ATL Stock,Hot Item,Notes\n`;
+    const rows = itemsRes.rows.map(item => {
+      const lookupName = (item.proclean_name || item.pk_name).toUpperCase();
+      const atl = atlMap[lookupName] ?? '';
+      const shipQtys = shipmentsRes.rows.map(s => shipItemMap[s.id]?.[item.pk_name] || 0);
+      const totalOnWater = shipQtys.reduce((a, b) => a + b, 0);
+      return [`"${item.pk_name}"`, `"${item.proclean_name || ''}"`, item.uom, item.qty_in_pakistan || 0, ...shipQtys, totalOnWater, atl,
+        item.target_stock !== null && item.target_stock !== undefined ? item.target_stock : '',
+        item.is_hot ? 'YES' : '', `"${(item.notes || '').replace(/"/g, '""')}"`].join(',');
+    }).join('\n');
+    const date = new Date().toISOString().split('T')[0];
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="Pakistan_Inventory_${date}.csv"`);
+    res.send(header + rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Serve Production Dashboard (read-only, Pakistan team)
 app.get('/production', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'production.html'));
