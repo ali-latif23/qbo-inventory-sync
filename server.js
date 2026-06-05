@@ -491,9 +491,13 @@ async function processInvoiceSync(sourceCompanyKey, invoiceId) {
 
 // ProClean invoice → only update app tracker (QBO handles QtyOnHand natively)
 async function processInvoiceSyncAppOnly(invoiceId) {
-  const data = await getInvoiceWithRetry('company1', invoiceId);
-  const invoice = data?.Invoice;
+  const invoice = await getInvoiceWithRetry('company1', invoiceId);
   if (!invoice) return;
+
+  const docNum = invoice.DocNumber || invoiceId;
+  const invoiceLabel = invoice.DocNumber && invoice.DocNumber !== String(invoiceId)
+    ? `Invoice ${docNum} (ID:${invoiceId}) from ProClean`
+    : `Invoice ${invoiceId} from ProClean`;
 
   const lineItems = invoice.Line?.filter(l => l.DetailType === 'SalesItemLineDetail') || [];
   for (const line of lineItems) {
@@ -501,7 +505,15 @@ async function processInvoiceSyncAppOnly(invoiceId) {
     const itemName = detail?.ItemRef?.name;
     if (!itemName) continue;
     const qty = detail.Qty || 0;
+    if (qty <= 0) continue;
     await appInventoryAdjust(itemName, -qty, `invoice:${invoiceId}:ProClean`);
+    // Log to proclean_movements for visibility (QBO handles actual qty, we just record it)
+    try {
+      const itemRes = await pool.query('SELECT qbo_id FROM proclean_items WHERE name = $1 LIMIT 1', [itemName]);
+      if (itemRes.rows.length) {
+        await pcLogMovement(itemRes.rows[0].qbo_id, itemName, qty, 'deduction', 'invoice:ProClean', invoiceLabel);
+      }
+    } catch(e) { /* item may not be in proclean_items, skip */ }
   }
   log('info', `App tracker updated for ProClean invoice ${invoiceId}`, { invoiceId });
 }
@@ -512,13 +524,25 @@ async function processBillAppOnly(billId) {
   const bill = data?.Bill;
   if (!bill) return;
 
+  const docNum = bill.DocNumber || billId;
+  const billLabel = bill.DocNumber && bill.DocNumber !== String(billId)
+    ? `Bill ${docNum} (ID:${billId}) from ProClean`
+    : `Bill ${billId} from ProClean`;
+
   const lineItems = bill.Line?.filter(l => l.DetailType === 'ItemBasedExpenseLineDetail') || [];
   for (const line of lineItems) {
     const detail = line.ItemBasedExpenseLineDetail;
     const itemName = detail?.ItemRef?.name;
     if (!itemName) continue;
     const qty = detail.Qty || 0;
+    if (qty <= 0) continue;
     await appInventoryAdjust(itemName, qty, `bill:${billId}:ProClean`);
+    try {
+      const itemRes = await pool.query('SELECT qbo_id FROM proclean_items WHERE name = $1 LIMIT 1', [itemName]);
+      if (itemRes.rows.length) {
+        await pcLogMovement(itemRes.rows[0].qbo_id, itemName, qty, 'restock', 'bill:ProClean', billLabel);
+      }
+    } catch(e) {}
   }
   log('info', `App tracker updated for ProClean bill ${billId} (+stock)`, { billId });
 }
