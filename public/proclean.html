@@ -509,11 +509,11 @@
             <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
             Export to Excel
           </a>
-          <label class="btn-primary" style="cursor:pointer;display:flex;align-items:center;gap:7px">
+          <button class="btn-primary" style="display:flex;align-items:center;gap:7px" onclick="showUploadInstructions('proclean')">
             <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l4-4m0 0l4 4m-4-4v12"/></svg>
             Upload CSV
-            <input type="file" accept=".csv" style="display:none" onchange="handleProCleanUpload(event)" />
-          </label>
+          </button>
+          <input type="file" accept=".csv" id="proclean-file-input" style="display:none" onchange="handleProCleanUpload(event)" />
         </div>
       </div>
       <div class="toolbar">
@@ -666,11 +666,11 @@
             <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
             Export
           </a>
-          <label class="btn-primary" style="cursor:pointer;display:flex;align-items:center;gap:7px">
+          <button class="btn-primary" style="display:flex;align-items:center;gap:7px" onclick="showUploadInstructions('pakistan')">
             <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l4-4m0 0l4 4m-4-4v12"/></svg>
             Upload CSV
-            <input type="file" accept=".csv" style="display:none" onchange="handlePkUploadPC(event)" />
-          </label>
+          </button>
+          <input type="file" accept=".csv" id="pakistan-file-input-pc" style="display:none" onchange="handlePkUploadPC(event)" />
           <button class="btn-primary" id="add-shipment-btn-pc" onclick="showAddShipmentPC()">+ Add Shipment</button>
         </div>
       </div>
@@ -1251,6 +1251,21 @@ async function handlePkUploadPC(event){const file=event.target.files[0];if(!file
 
 // Bulk Upload
 let pendingBulkChanges=[];
+function showUploadInstructions(type) {
+  document.getElementById('upload-instructions-modal').dataset.type = type;
+  document.getElementById('upload-instructions-modal').style.display = 'flex';
+  // Update modal content based on type
+  const btn = document.querySelector('#upload-instructions-modal .btn-primary[onclick]');
+  if (type === 'proclean') {
+    btn.setAttribute('onclick', 'openProCleanFilePicker()');
+  } else {
+    btn.setAttribute('onclick', 'openPakistanFilePicker()');
+  }
+}
+function closeUploadInstructions() { document.getElementById('upload-instructions-modal').style.display = 'none'; }
+function openProCleanFilePicker() { closeUploadInstructions(); document.getElementById('proclean-file-input').click(); }
+function openPakistanFilePicker() { closeUploadInstructions(); document.getElementById('pakistan-file-input-pc').click(); }
+
 function parseCsv(text){const lines=text.trim().split('\n');const headers=lines[0].split(',').map(h=>h.replace(/"/g,'').trim().toLowerCase().replace(/ /g,'_').replace(/[(]/g,'').replace(/[)]/g,''));return lines.slice(1).map(line=>{const vals=[];let cur='',inQ=false;for(const ch of line){if(ch==='"')inQ=!inQ;else if(ch===','&&!inQ){vals.push(cur.trim());cur='';}else cur+=ch;}vals.push(cur.trim());const row={};headers.forEach((h,i)=>row[h]=vals[i]||'');return row;});}
 async function handleProCleanUpload(event){const file=event.target.files[0];if(!file)return;const text=await file.text();const rows=parseCsv(text).map(r=>({name:r.item_name||r.name||'',sku:r.sku||'',qty_on_hand:r.qty_on_hand!==''?r.qty_on_hand:undefined,unit_price:r.sale_price!==''?r.sale_price:undefined,purchase_cost:r.cost_price!==''?r.cost_price:undefined,uom:r.uom||undefined,description:r.sales_description||r.description||undefined}));event.target.value='';try{const res=await apiFetch('/api/proclean/bulk-preview',{method:'POST',body:JSON.stringify({rows})});showBulkModal(res.changes,'proclean');}catch(e){alert('Error: '+e.message);}}
 function showBulkModal(changes,type){pendingBulkChanges=changes;document.getElementById('bulk-modal').style.display='flex';const valid=changes.filter(c=>c.status==='changed'),notFound=changes.filter(c=>c.status==='not_found');document.getElementById('bulk-apply-btn').dataset.type=type;if(valid.length===0&&notFound.length===0){document.getElementById('bulk-modal-body').innerHTML='<div style="text-align:center;padding:40px;color:var(--text3)">No changes detected.</div>';document.getElementById('bulk-apply-btn').style.display='none';return;}document.getElementById('bulk-apply-btn').style.display='block';let html='';if(valid.length>0){html+='<div style="font-size:13px;font-weight:600;margin-bottom:12px">'+valid.length+' item(s) with changes:</div>';html+='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:var(--surface2)"><th style="padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)">Item</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)">Field</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)">Current</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)">New</th></tr></thead><tbody>';for(const c of valid)for(const f of c.fields)html+=`<tr style="border-bottom:1px solid var(--border)"><td style="padding:8px 12px;font-weight:500">${c.name||c.pk_name}</td><td style="padding:8px 12px;color:var(--text2)">${f.label}</td><td style="padding:8px 12px;font-family:var(--mono);color:var(--text3)">${f.current}</td><td style="padding:8px 12px;font-family:var(--mono);color:var(--green);font-weight:600">${f.new}</td></tr>`;html+='</tbody></table>';}if(notFound.length>0)html+='<div style="margin-top:16px;font-size:12px;color:var(--text3)">'+notFound.length+' not found: '+notFound.map(c=>c.identifier||c.pk_name).join(', ')+'</div>';document.getElementById('bulk-modal-body').innerHTML=html;}
@@ -1263,6 +1278,48 @@ function closeBulkModal(){document.getElementById('bulk-modal').style.display='n
   checkTokenExpiry();
 })();
 </script>
+<!-- Upload Instructions Modal -->
+<div id="upload-instructions-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:300;align-items:center;justify-content:center">
+  <div style="background:white;border-radius:12px;width:640px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 40px rgba(0,0,0,0.15)">
+    <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+      <div style="font-size:15px;font-weight:700">How to Use Bulk Upload</div>
+      <button onclick="closeUploadInstructions()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text3)">x</button>
+    </div>
+    <div style="padding:20px 22px;overflow-y:auto;flex:1;font-size:13px;line-height:1.7;color:var(--text)">
+      <div style="background:#ebf8ff;border:1px solid #bee3f8;border-radius:8px;padding:12px 16px;margin-bottom:16px;color:#2c5282;font-size:13px;">
+        <strong>Step 1:</strong> Click <strong>Export to Excel</strong> first to download the current inventory as a CSV file.
+      </div>
+      <div style="background:#f0fff4;border:1px solid #9ae6b4;border-radius:8px;padding:12px 16px;margin-bottom:16px;color:#276749;font-size:13px;">
+        <strong>Step 2:</strong> Open the CSV in Excel or Google Sheets. Edit the values you want to change. <strong>Do not change the Item Name or SKU columns</strong> — those are used to identify which items to update.
+      </div>
+      <div style="font-weight:600;margin-bottom:8px;">What you can edit:</div>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12px;">
+        <thead><tr style="background:var(--surface2)">
+          <th style="padding:7px 10px;text-align:left;border:1px solid var(--border)">Column</th>
+          <th style="padding:7px 10px;text-align:left;border:1px solid var(--border)">What it does</th>
+          <th style="padding:7px 10px;text-align:left;border:1px solid var(--border)">Updates QBO?</th>
+        </tr></thead>
+        <tbody>
+          <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Qty On Hand</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the current stock level</td><td style="padding:7px 10px;border:1px solid var(--border);color:var(--green)">Yes — ProClean QBO</td></tr>
+          <tr style="background:var(--surface2)"><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Sale Price</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the selling price</td><td style="padding:7px 10px;border:1px solid var(--border);color:var(--green)">Yes — ProClean QBO</td></tr>
+          <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Cost Price</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the purchase cost</td><td style="padding:7px 10px;border:1px solid var(--border);color:var(--green)">Yes — ProClean QBO</td></tr>
+          <tr style="background:var(--surface2)"><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">UOM</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates unit of measure</td><td style="padding:7px 10px;border:1px solid var(--border);color:var(--green)">Yes — ProClean QBO</td></tr>
+          <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Sales Description</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the sales description</td><td style="padding:7px 10px;border:1px solid var(--border);color:var(--green)">Yes — all 3 companies</td></tr>
+        </tbody>
+      </table>
+      <div style="background:#fffbeb;border:1px solid #f6ad55;border-radius:8px;padding:12px 16px;margin-bottom:16px;color:#744210;font-size:12px;">
+        <strong>Important:</strong> Only rows with changed values will be updated. Items with no changes are automatically skipped. You will see a preview of all detected changes before anything is saved — review carefully before confirming.
+      </div>
+      <div style="font-weight:600;margin-bottom:6px;">Do NOT change these columns:</div>
+      <div style="font-size:12px;color:var(--text2)">Item Name, SKU, Sale Value, Cost Value, Last Synced, Last Updated By — these are read-only reference fields. Changing them will cause items to not be found during upload.</div>
+    </div>
+    <div style="padding:14px 22px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px">
+      <button class="btn-ghost" onclick="closeUploadInstructions()">Cancel</button>
+      <button class="btn-primary" onclick="openProCleanFilePicker()">Got it — Choose File</button>
+    </div>
+  </div>
+</div>
+
 <!-- Bulk Upload Modal -->
 <div id="bulk-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:300;align-items:center;justify-content:center">
   <div style="background:white;border-radius:12px;width:700px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 40px rgba(0,0,0,0.15)">
