@@ -1303,14 +1303,15 @@ function closeBulkModal(){document.getElementById('bulk-modal').style.display='n
           <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Qty On Hand</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the current stock level</td><td style="padding:7px 10px;border:1px solid var(--border);color:var(--green)">Yes — ProClean QBO</td></tr>
           <tr style="background:var(--surface2)"><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Sale Price</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the selling price</td><td style="padding:7px 10px;border:1px solid var(--border);color:var(--green)">Yes — ProClean QBO</td></tr>
           <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Cost Price</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the purchase cost</td><td style="padding:7px 10px;border:1px solid var(--border);color:var(--green)">Yes — ProClean QBO</td></tr>
-          <tr style="background:var(--surface2)"><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Sales Description</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the sales description</td><td style="padding:7px 10px;border:1px solid var(--border);color:var(--green)">Yes — all 3 companies</td></tr>
+          <tr style="background:var(--surface2)"><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">UOM</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates how the unit is displayed on the website only</td><td style="padding:7px 10px;border:1px solid var(--border);color:#744210">Website only — not QBO</td></tr>
+          <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Sales Description</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the sales description</td><td style="padding:7px 10px;border:1px solid var(--border);color:var(--green)">Yes — all 3 companies</td></tr>
         </tbody>
       </table>
       <div style="background:#fffbeb;border:1px solid #f6ad55;border-radius:8px;padding:12px 16px;margin-bottom:16px;color:#744210;font-size:12px;">
         <strong>Important:</strong> Only rows with changed values will be updated. Items with no changes are automatically skipped. You will see a preview of all detected changes before anything is saved — review carefully before confirming.
       </div>
       <div style="font-weight:600;margin-bottom:6px;">Do NOT change these columns:</div>
-      <div style="font-size:12px;color:var(--text2)">Item Name, SKU, UOM, Sale Value, Cost Value, Last Synced, Last Updated By — these are read-only reference columns. Changing them has no effect on the upload (except Item Name which is used for matching — do not change that).</div>
+      <div style="font-size:12px;color:var(--text2)">Item Name, SKU, Sale Value, Cost Value, Last Synced, Last Updated By — these are read-only reference columns. Changing them has no effect on the upload (except Item Name which is used for matching — do not change that).</div>
     </div>
     <div style="padding:14px 22px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px">
       <button class="btn-ghost" onclick="closeUploadInstructions()">Cancel</button>
