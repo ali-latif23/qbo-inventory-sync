@@ -1390,6 +1390,7 @@ app.post('/api/proclean/bulk-preview', async (req, res) => {
       if (row.unit_price!==undefined&&row.unit_price!==''&&parseFloat(row.unit_price)!==parseFloat(item.unit_price)) fc.fields.push({ field:'unit_price', label:'Sale Price', current:parseFloat(item.unit_price), new:parseFloat(row.unit_price) });
       if (row.purchase_cost!==undefined&&row.purchase_cost!==''&&parseFloat(row.purchase_cost)!==parseFloat(item.purchase_cost)) fc.fields.push({ field:'purchase_cost', label:'Cost Price', current:parseFloat(item.purchase_cost), new:parseFloat(row.purchase_cost) });
 
+      if (row.uom!==undefined&&row.uom!==''&&row.uom!==item.uom) fc.fields.push({ field:'uom', label:'UOM (display only)', current:item.uom, new:row.uom });
       if (row.description!==undefined&&row.description!==''&&row.description!==(item.description||'')) fc.fields.push({ field:'description', label:'Description', current:item.description||'', new:row.description });
       if (fc.fields.length > 0) { fc.status = 'changed'; changes.push(fc); }
     }
@@ -1423,6 +1424,9 @@ app.post('/api/proclean/bulk-apply', async (req, res) => {
       if (fm.purchase_cost !== undefined) {
         const qd = await qboGet('company1','item/'+item.qbo_id);
         if (qd.Item) { const co=appData.companies['company1'],tk=await getAccessToken('company1'); const r=await fetch(`${QBO_BASE}/${co.realmId}/item`,{method:'POST',headers:{'Authorization':'Bearer '+tk,'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({...qd.Item,PurchaseCost:fm.purchase_cost})}); const rd=await r.json(); if(!rd.Fault) await pool.query('UPDATE proclean_items SET purchase_cost=$1,sync_token=$2 WHERE qbo_id=$3',[fm.purchase_cost,rd.Item.SyncToken,item.qbo_id]); }
+      }
+      if (fm.uom!==undefined) {
+        await pool.query('UPDATE proclean_items SET uom=$1,last_updated_by=$2 WHERE qbo_id=$3',[fm.uom,'bulk_upload',item.qbo_id]);
       }
       if (fm.description!==undefined) {
         const qd=await qboGet('company1','item/'+item.qbo_id);
