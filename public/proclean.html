@@ -151,6 +151,7 @@
     .mov-badge { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; }
     .mov-badge.deduction { background: var(--red-dim); color: var(--red); }
     .mov-badge.restock { background: var(--green-dim); color: var(--green); }
+    .mov-badge.qbo_native { background: #edf2f7; color: #718096; font-size: 11px; }
     .mov-name { font-size: 13px; font-weight: 500; color: var(--text); }
     .mov-source { font-size: 11px; color: var(--text3); }
     .mov-qty { font-family: var(--mono); font-size: 13px; font-weight: 600; }
@@ -769,13 +770,14 @@ async function loadDashboard() {
       movEl.innerHTML = movements.map(m => {
         const item = items.find(i => i.qbo_id === m.qbo_id);
         const isRestock = m.movement_type === 'restock';
+        const isQboNative = m.movement_type === 'qbo_native';
         return `<div class="movement-item">
-          <div class="mov-badge ${m.movement_type}">${isRestock ? '+' : '−'}</div>
+          <div class="mov-badge ${m.movement_type}">${isRestock ? '+' : isQboNative ? '○' : '−'}</div>
           <div>
             <div class="mov-name">${item ? item.name : m.item_name}</div>
             <div class="mov-source">${m.source || ''} ${m.note ? '· ' + m.note : ''}</div>
           </div>
-          <div class="mov-qty ${isRestock ? 'qty-ok' : 'qty-negative'}">${isRestock ? '+' : '−'}${m.quantity}</div>
+          <div class="mov-qty ${isRestock ? 'qty-ok' : isQboNative ? '' : 'qty-negative'}" style="${isQboNative ? 'color:#718096' : ''}">${isRestock ? '+' : isQboNative ? '' : '−'}${m.quantity}</div>
           <div class="mov-date">${fmtDate(m.created_at)}</div>
         </div>`;
       }).join('');
@@ -903,10 +905,11 @@ function renderMovLog(movements, item) {
   if (!movements.length) { el.innerHTML = '<div class="empty-state">No movements logged yet</div>'; return; }
   el.innerHTML = movements.map(m => {
     const isRestock = m.movement_type === 'restock';
+    const isQboNative = m.movement_type === 'qbo_native';
     return `<div class="log-item">
-      <div class="mov-badge ${m.movement_type}">${isRestock ? '+' : '−'}</div>
+      <div class="mov-badge ${m.movement_type}">${isRestock ? '+' : isQboNative ? '○' : '−'}</div>
       <div class="log-info">
-        <span class="log-qty ${isRestock ? 'qty-ok' : 'qty-negative'}">${isRestock ? '+' : '−'}${m.quantity} ${item.uom || ''}</span>
+        <span class="log-qty ${isRestock ? 'qty-ok' : isQboNative ? '' : 'qty-negative'}" style="${isQboNative ? 'color:#718096' : ''}">${isRestock ? '+' : isQboNative ? '' : '−'}${m.quantity} ${item.uom || ''}</span>
         ${m.note ? `<span class="log-note">${m.note}</span>` : ''}
         <span class="log-source">${m.source || ''}</span>
       </div>
@@ -1132,10 +1135,11 @@ async function loadAllMovements() {
     el.innerHTML = `<div class="mov-log" style="max-height:none">` + movements.map(m => {
       const item = items.find(i => i.qbo_id === m.qbo_id);
       const isRestock = m.movement_type === 'restock';
+      const isQboNative = m.movement_type === 'qbo_native';
       return `<div class="log-item">
-        <div class="mov-badge ${m.movement_type}">${isRestock ? '+' : '−'}</div>
+        <div class="mov-badge ${m.movement_type}">${isRestock ? '+' : isQboNative ? '○' : '−'}</div>
         <div class="log-info">
-          <span class="log-qty ${isRestock ? 'qty-ok' : 'qty-negative'}">${isRestock ? '+' : '−'}${m.quantity}</span>
+          <span class="log-qty ${isRestock ? 'qty-ok' : isQboNative ? '' : 'qty-negative'}" style="${isQboNative ? 'color:#718096' : ''}">${isRestock ? '+' : isQboNative ? '' : '−'}${m.quantity}</span>
           <span class="log-note">${item ? item.name : m.item_name}</span>
           <span class="log-source">${m.source || ''} ${m.note ? '· ' + m.note : ''}</span>
         </div>
