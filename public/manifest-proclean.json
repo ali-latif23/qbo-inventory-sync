@@ -1,0 +1,17 @@
+{
+  "name": "ProClean Inventory",
+  "short_name": "ProClean",
+  "description": "ProClean inventory tracking — Atlanta Warehouse",
+  "start_url": "/proclean",
+  "display": "standalone",
+  "background_color": "#f0f4f8",
+  "theme_color": "#2c5282",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' rx='24' fill='%232c5282'/><text y='140' x='96' text-anchor='middle' font-size='120' font-family='Arial' fill='white'>📦</text></svg>",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    }
+  ]
+}
