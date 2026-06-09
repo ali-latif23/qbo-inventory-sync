@@ -494,6 +494,16 @@ async function processInvoiceSyncAppOnly(invoiceId) {
   const invoice = await getInvoiceWithRetry('company1', invoiceId);
   if (!invoice) return;
 
+  // Date guard: skip invoices older than 7 days — prevents phantom webhook replays
+  const txnDate = invoice.TxnDate;
+  if (txnDate) {
+    const invoiceAge = (Date.now() - new Date(txnDate).getTime()) / (1000 * 60 * 60 * 24);
+    if (invoiceAge > 7) {
+      log('warning', `ProClean invoice ${invoiceId} is ${Math.floor(invoiceAge)} days old — skipping to prevent phantom log entry`, { invoiceId, txnDate });
+      return;
+    }
+  }
+
   const docNum = invoice.DocNumber || invoiceId;
   const invoiceLabel = invoice.DocNumber && invoice.DocNumber !== String(invoiceId)
     ? `Invoice ${docNum} (ID:${invoiceId}) from ProClean`
@@ -507,13 +517,13 @@ async function processInvoiceSyncAppOnly(invoiceId) {
     const qty = detail.Qty || 0;
     if (qty <= 0) continue;
     await appInventoryAdjust(itemName, -qty, `invoice:${invoiceId}:ProClean`);
-    // Log to proclean_movements for visibility (QBO handles actual qty, we just record it)
+    // Log for visibility only — QBO handles actual inventory natively, no qty change here
     try {
       const itemRes = await pool.query('SELECT qbo_id FROM proclean_items WHERE name = $1 LIMIT 1', [itemName]);
       if (itemRes.rows.length) {
-        await pcLogMovement(itemRes.rows[0].qbo_id, itemName, qty, 'deduction', 'invoice:ProClean', invoiceLabel);
+        await pcLogMovement(itemRes.rows[0].qbo_id, itemName, qty, 'qbo_native', 'invoice:ProClean', invoiceLabel + ' · QBO managed');
       }
-    } catch(e) { /* item may not be in proclean_items, skip */ }
+    } catch(e) {}
   }
   log('info', `App tracker updated for ProClean invoice ${invoiceId}`, { invoiceId });
 }
@@ -523,6 +533,16 @@ async function processBillAppOnly(billId) {
   const data = await qboGet('company1', `bill/${billId}`);
   const bill = data?.Bill;
   if (!bill) return;
+
+  // Date guard: skip bills older than 7 days — prevents phantom webhook replays
+  const txnDate = bill.TxnDate;
+  if (txnDate) {
+    const billAge = (Date.now() - new Date(txnDate).getTime()) / (1000 * 60 * 60 * 24);
+    if (billAge > 7) {
+      log('warning', `ProClean bill ${billId} is ${Math.floor(billAge)} days old — skipping to prevent phantom log entry`, { billId, txnDate });
+      return;
+    }
+  }
 
   const docNum = bill.DocNumber || billId;
   const billLabel = bill.DocNumber && bill.DocNumber !== String(billId)
@@ -537,10 +557,11 @@ async function processBillAppOnly(billId) {
     const qty = detail.Qty || 0;
     if (qty <= 0) continue;
     await appInventoryAdjust(itemName, qty, `bill:${billId}:ProClean`);
+    // Log for visibility only — QBO handles actual inventory natively, no qty change here
     try {
       const itemRes = await pool.query('SELECT qbo_id FROM proclean_items WHERE name = $1 LIMIT 1', [itemName]);
       if (itemRes.rows.length) {
-        await pcLogMovement(itemRes.rows[0].qbo_id, itemName, qty, 'restock', 'bill:ProClean', billLabel);
+        await pcLogMovement(itemRes.rows[0].qbo_id, itemName, qty, 'qbo_native', 'bill:ProClean', billLabel + ' · QBO managed');
       }
     } catch(e) {}
   }
