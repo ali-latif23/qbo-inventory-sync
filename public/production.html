@@ -987,9 +987,9 @@ function buildPkTable(data) {
     const baleTag = item.pk_name === '1616B' ? '<span class="bale-tag">BALE</span>' : '';
     html += `<td style="background:#ebf8ff"><span class="pk-atl" style="color:${atlColor}">${atlQty}</span>${baleTag}</td>`;
 
-    // Target ATL stock
-    const targetVal = item.target_stock !== null && item.target_stock !== undefined ? item.target_stock : '';
-    html += `<td style="background:#f0fff4"><input class="pk-input" type="number" value="${targetVal}" placeholder="—" oninput="debounce('target_${safe}',()=>savePkTarget('${item.pk_name}',this.value),2000)" /></td>`;
+    // Target ATL stock — read-only, sourced from proclean_items.target_stock set on the ProClean site
+    const targetVal = item.target_stock !== null && item.target_stock !== undefined ? item.target_stock : '—';
+    html += `<td style="background:#f0fff4;text-align:center"><span style="font-family:var(--mono);font-size:13px;font-weight:600;color:var(--text2)">${targetVal}</span></td>`;
 
     // Hot toggle
     const hotActive = item.is_hot ? 'active' : 'inactive';
@@ -1036,16 +1036,6 @@ async function saveShipmentQty(shipmentId, pkName, value) {
       body: JSON.stringify({ quantity: parseFloat(value) || 0 })
     });
   } catch(e) { console.error('Save error:', e); }
-}
-
-async function savePkTarget(pkName, value) {
-  try {
-    await fetch(API + '/api/pk/inventory/' + encodeURIComponent(pkName) + '/target', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target_stock: value === '' ? null : parseFloat(value) })
-    });
-  } catch(e) { console.error('Save target error:', e); }
 }
 
 async function savePkNotes(pkName, value) {
