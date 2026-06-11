@@ -64,6 +64,7 @@ async function initDb() {
     ALTER TABLE proclean_items ADD COLUMN IF NOT EXISTS unit_price NUMERIC NOT NULL DEFAULT 0;
     ALTER TABLE proclean_items ADD COLUMN IF NOT EXISTS purchase_cost NUMERIC NOT NULL DEFAULT 0;
     ALTER TABLE proclean_items ADD COLUMN IF NOT EXISTS description TEXT;
+    ALTER TABLE proclean_items ADD COLUMN IF NOT EXISTS target_stock NUMERIC;
     CREATE TABLE IF NOT EXISTS pk_inventory (
       pk_name TEXT PRIMARY KEY,
       proclean_name TEXT,
@@ -101,6 +102,10 @@ async function initDb() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  // Migration: allow movement logging even when item isn't matched in proclean_items.
+  // Old constraint (NOT NULL + FK) silently blocked logs for unmatched items.
+  await pool.query(`ALTER TABLE proclean_movements DROP CONSTRAINT IF EXISTS proclean_movements_qbo_id_fkey;`);
+  await pool.query(`ALTER TABLE proclean_movements ALTER COLUMN qbo_id DROP NOT NULL;`);
   console.log('✅ Database initialized');
 }
 
@@ -160,8 +165,8 @@ const SCOPES = 'com.intuit.quickbooks.accounting';
 
 // ─── PERSISTENT STORAGE (PostgreSQL) ─────────────────────────────────────────
 async function loadData() {
-  const res = await pool.query(`SELECT key, value FROM app_state WHERE key IN ('companies', 'stats', 'pendingStates')`);
-  const data = { companies: {}, stats: { totalSynced: 0, errors: 0, lastSync: null }, pendingStates: {} };
+  const res = await pool.query(`SELECT key, value FROM app_state WHERE key IN ('companies', 'stats', 'pendingStates', 'deductionFailures')`);
+  const data = { companies: {}, stats: { totalSynced: 0, errors: 0, lastSync: null }, pendingStates: {}, deductionFailures: [] };
   for (const row of res.rows) {
     data[row.key] = row.value;
   }
@@ -195,7 +200,7 @@ async function getLogs(limit = 50) {
   return res.rows.map(r => ({ ...r, details: r.details }));
 }
 
-let appData = { companies: {}, stats: { totalSynced: 0, errors: 0, lastSync: null }, pendingStates: {} };
+let appData = { companies: {}, stats: { totalSynced: 0, errors: 0, lastSync: null }, pendingStates: {}, deductionFailures: [] };
 
 // ─── MIDDLEWARE ─────────────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public')));
@@ -423,6 +428,9 @@ async function processInvoiceSync(sourceCompanyKey, invoiceId) {
   }
 
   const results = [];
+  const alertInvoiceLabel = invoice.DocNumber && invoice.DocNumber !== String(invoiceId)
+    ? `Invoice ${invoice.DocNumber} (ID:${invoiceId})`
+    : `Invoice ${invoiceId}`;
 
   for (const line of lineItems) {
     const detail = line.SalesItemLineDetail;
@@ -443,6 +451,8 @@ async function processInvoiceSync(sourceCompanyKey, invoiceId) {
 
       if (masterItems.length === 0) {
         log('warning', `Item "${itemName}" not found in master inventory`, { itemName, invoiceId });
+        sendDeductionFailureAlert({ sourceCompany: sourceCompany.name, invoiceLabel: alertInvoiceLabel, itemName, qty, reason: 'Item not found in ProClean by exact name match' });
+        recordDeductionFailure({ sourceCompany: sourceCompany.name, invoiceLabel: alertInvoiceLabel, itemName, qty, reason: 'Item not found in ProClean by exact name match' });
         continue;
       }
 
@@ -480,9 +490,13 @@ async function processInvoiceSync(sourceCompanyKey, invoiceId) {
         } catch(e) { console.error('proclean_items update error:', e.message); }
       } else {
         log('error', `Failed to update "${itemName}"`, { updateResult, itemName });
+        sendDeductionFailureAlert({ sourceCompany: sourceCompany.name, invoiceLabel: alertInvoiceLabel, itemName, qty, reason: 'QBO inventory update failed (possibly stale SyncToken or API error)' });
+        recordDeductionFailure({ sourceCompany: sourceCompany.name, invoiceLabel: alertInvoiceLabel, itemName, qty, reason: 'QBO inventory update failed (possibly stale SyncToken or API error)' });
       }
     } catch (err) {
       log('error', `Error syncing item "${itemName}": ${err.message}`, { itemName, error: err.message });
+      sendDeductionFailureAlert({ sourceCompany: sourceCompany.name, invoiceLabel: alertInvoiceLabel, itemName, qty, reason: 'Error: ' + err.message });
+      recordDeductionFailure({ sourceCompany: sourceCompany.name, invoiceLabel: alertInvoiceLabel, itemName, qty, reason: 'Error: ' + err.message });
     }
   }
 
@@ -517,13 +531,13 @@ async function processInvoiceSyncAppOnly(invoiceId) {
     const qty = detail.Qty || 0;
     if (qty <= 0) continue;
     await appInventoryAdjust(itemName, -qty, `invoice:${invoiceId}:ProClean`);
-    // Log for visibility only — QBO handles actual inventory natively, no qty change here
+    // Log for visibility only — QBO handles actual inventory natively, no qty change here.
+    // Logs even when the item isn't matched in proclean_items (qbo_id NULL) so no movements go missing.
     try {
-      const itemRes = await pool.query('SELECT qbo_id FROM proclean_items WHERE name = $1 LIMIT 1', [itemName]);
-      if (itemRes.rows.length) {
-        await pcLogMovement(itemRes.rows[0].qbo_id, itemName, qty, 'qbo_native', 'invoice:ProClean', invoiceLabel + ' · QBO managed');
-      }
-    } catch(e) {}
+      const qboId = await findProcleanItem(itemName);
+      await pcLogMovement(qboId, itemName, qty, 'qbo_native', 'invoice:ProClean', invoiceLabel + ' · QBO managed');
+      if (!qboId) log('warning', `ProClean movement logged without item link — "${itemName}" not matched by name or SKU`, { itemName, invoiceId });
+    } catch(e) { console.error('ProClean movement log error:', e.message); }
   }
   log('info', `App tracker updated for ProClean invoice ${invoiceId}`, { invoiceId });
 }
@@ -557,13 +571,13 @@ async function processBillAppOnly(billId) {
     const qty = detail.Qty || 0;
     if (qty <= 0) continue;
     await appInventoryAdjust(itemName, qty, `bill:${billId}:ProClean`);
-    // Log for visibility only — QBO handles actual inventory natively, no qty change here
+    // Log for visibility only — QBO handles actual inventory natively, no qty change here.
+    // Logs even when the item isn't matched in proclean_items (qbo_id NULL) so no movements go missing.
     try {
-      const itemRes = await pool.query('SELECT qbo_id FROM proclean_items WHERE name = $1 LIMIT 1', [itemName]);
-      if (itemRes.rows.length) {
-        await pcLogMovement(itemRes.rows[0].qbo_id, itemName, qty, 'qbo_native', 'bill:ProClean', billLabel + ' · QBO managed');
-      }
-    } catch(e) {}
+      const qboId = await findProcleanItem(itemName);
+      await pcLogMovement(qboId, itemName, qty, 'qbo_native', 'bill:ProClean', billLabel + ' · QBO managed');
+      if (!qboId) log('warning', `ProClean movement logged without item link — "${itemName}" not matched by name or SKU`, { itemName, billId });
+    } catch(e) { console.error('ProClean movement log error:', e.message); }
   }
   log('info', `App tracker updated for ProClean bill ${billId} (+stock)`, { billId });
 }
@@ -730,8 +744,24 @@ app.get('/api/status', (req, res) => {
   res.json({
     companies,
     stats: appData.stats || { totalSynced: 0, errors: 0, lastSync: null },
+    deductionFailures: appData.deductionFailures || [],
     webhookUrl: `${process.env.APP_URL || 'https://your-app.railway.app'}/webhook`
   });
+});
+
+// Clear one or all unresolved deduction failures (after the stock is corrected manually)
+app.post('/api/deduction-failures/clear', async (req, res) => {
+  try {
+    const { id } = req.body || {};
+    if (!Array.isArray(appData.deductionFailures)) appData.deductionFailures = [];
+    if (id) {
+      appData.deductionFailures = appData.deductionFailures.filter(f => f.id !== id);
+    } else {
+      appData.deductionFailures = [];
+    }
+    await saveField('deductionFailures', appData.deductionFailures);
+    res.json({ success: true, remaining: appData.deductionFailures.length });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/logs', async (req, res) => {
@@ -928,6 +958,53 @@ async function pcLogMovement(qboId, itemName, quantity, movementType, source, no
   );
 }
 
+// Look up an item in proclean_items by exact name, falling back to SKU.
+async function findProcleanItem(itemName) {
+  const r = await pool.query(
+    'SELECT qbo_id FROM proclean_items WHERE name = $1 OR sku = $1 LIMIT 1', [itemName]
+  );
+  return r.rows.length ? r.rows[0].qbo_id : null;
+}
+
+// Alert email when an LP/BEG invoice line item fails to deduct.
+// Fire-and-forget: an email failure must never break webhook processing.
+async function sendDeductionFailureAlert({ sourceCompany, invoiceLabel, itemName, qty, reason }) {
+  try {
+    await sendResendEmail({
+      to: '23alilatif@gmail.com',
+      subject: `⚠️ Deduction failed: ${itemName} on ${invoiceLabel}`,
+      html: `
+        <h2 style="color:#c53030">Inventory deduction failed</h2>
+        <p>An invoice line item could not be deducted from ProClean stock. <b>ProClean's QBO quantity was NOT updated for this item</b> — correct it manually if the sale is real.</p>
+        <table style="border-collapse:collapse">
+          <tr><td style="padding:4px 12px 4px 0;color:#666">Company</td><td><b>${sourceCompany}</b></td></tr>
+          <tr><td style="padding:4px 12px 4px 0;color:#666">Invoice</td><td><b>${invoiceLabel}</b></td></tr>
+          <tr><td style="padding:4px 12px 4px 0;color:#666">Item</td><td><b>${itemName}</b></td></tr>
+          <tr><td style="padding:4px 12px 4px 0;color:#666">Quantity</td><td><b>${qty}</b></td></tr>
+          <tr><td style="padding:4px 12px 4px 0;color:#666">Reason</td><td>${reason}</td></tr>
+        </table>
+        <p style="color:#666;font-size:13px">Check the item name matches exactly (case-sensitive) between ${sourceCompany} and ProClean in QBO.</p>
+      `
+    });
+  } catch (e) { console.error('Deduction alert email failed:', e.message); }
+}
+
+// Record an unresolved deduction failure so it shows as a banner on the dashboard
+// until someone marks it handled. Persisted to app_state so it survives restarts.
+async function recordDeductionFailure({ sourceCompany, invoiceLabel, itemName, qty, reason }) {
+  try {
+    if (!Array.isArray(appData.deductionFailures)) appData.deductionFailures = [];
+    appData.deductionFailures.unshift({
+      id: Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      sourceCompany, invoiceLabel, itemName, qty, reason,
+      at: new Date().toISOString()
+    });
+    // Keep the list bounded
+    if (appData.deductionFailures.length > 100) appData.deductionFailures = appData.deductionFailures.slice(0, 100);
+    await saveField('deductionFailures', appData.deductionFailures);
+  } catch (e) { console.error('recordDeductionFailure error:', e.message); }
+}
+
 async function syncProCleanItemsFromQBO() {
   if (!appData.companies['company1']?.tokens) return;
   try {
@@ -1043,6 +1120,24 @@ app.get('/api/proclean/items/:qboId/name-check', async (req, res) => {
 });
 
 // PATCH item (qty, name, uom) → writes to QBO (name update checks all 3 companies)
+// PATCH target stock ONLY — website/DB display value, never written to QBO.
+// Kept separate from the main item PATCH (which writes qty/price to QBO) so a
+// target update can never trigger a QuickBooks write.
+app.patch('/api/proclean/items/:qboId/target', async (req, res) => {
+  try {
+    const { target_stock } = req.body;
+    const val = (target_stock === null || target_stock === undefined || target_stock === '')
+      ? null : parseFloat(target_stock);
+    if (val !== null && (isNaN(val) || val < 0)) return res.status(400).json({ error: 'Invalid target_stock' });
+    const r = await pool.query(
+      'UPDATE proclean_items SET target_stock=$1 WHERE qbo_id=$2 RETURNING qbo_id, target_stock',
+      [val, req.params.qboId]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Item not found' });
+    res.json({ success: true, qbo_id: r.rows[0].qbo_id, target_stock: r.rows[0].target_stock });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.patch('/api/proclean/items/:qboId', async (req, res) => {
   const { qty_on_hand, name, uom, note, description } = req.body;
   try {
@@ -1257,42 +1352,9 @@ app.post('/api/proclean/items/:qboId/deactivate', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET export ProClean inventory as Excel (CSV for simplicity, opens in Excel)
-app.get('/api/proclean/export', async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT name, sku, uom, qty_on_hand, unit_price, purchase_cost,
-             (qty_on_hand * unit_price) as sale_value,
-             (qty_on_hand * purchase_cost) as cost_value,
-             last_synced, last_updated_by
-      FROM proclean_items
-      WHERE item_type = 'Inventory'
-      ORDER BY name ASC
-    `);
-
-    const header = 'Item Name,SKU,UOM,Qty On Hand,Sale Price,Cost Price,Sale Value,Cost Value,Last Synced,Last Updated By\n';
-    const rows = result.rows.map(r => [
-      `"${(r.name||'').replace(/"/g,'""')}"`,
-      `"${(r.sku||'').replace(/"/g,'""')}"`,
-      r.uom || '',
-      r.qty_on_hand || 0,
-      parseFloat(r.unit_price || 0).toFixed(2),
-      parseFloat(r.purchase_cost || 0).toFixed(2),
-      parseFloat(r.sale_value || 0).toFixed(2),
-      parseFloat(r.cost_value || 0).toFixed(2),
-      r.last_synced ? new Date(r.last_synced).toLocaleString('en-US', { timeZone: 'America/New_York' }) : '',
-      r.last_updated_by || ''
-    ].join(',')).join('\n');
-
-    const date = new Date().toISOString().split('T')[0];
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="ProClean_Inventory_${date}.csv"`);
-    res.send(header + rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
 
 // GET export Production (Pakistan) inventory as Excel - no prices
-app.get('/api/proclean/export-production', async (req, res) => {
+app.get('/export/production', async (req, res) => {
   const PRODUCTION_SKUS = [
     '10BT','12OZWC','1414B','1414BL','1414R','1426B','16OZWC','1818H','1818PW',
     '2.75HT','4.5BT','5.5BT','5BATHMAT','5BT','6BT','7BATHMAT','8BT',
@@ -1411,6 +1473,7 @@ app.post('/api/proclean/bulk-preview', async (req, res) => {
       if (row.unit_price!==undefined&&row.unit_price!==''&&parseFloat(row.unit_price)!==parseFloat(item.unit_price)) fc.fields.push({ field:'unit_price', label:'Sale Price', current:parseFloat(item.unit_price), new:parseFloat(row.unit_price) });
       if (row.purchase_cost!==undefined&&row.purchase_cost!==''&&parseFloat(row.purchase_cost)!==parseFloat(item.purchase_cost)) fc.fields.push({ field:'purchase_cost', label:'Cost Price', current:parseFloat(item.purchase_cost), new:parseFloat(row.purchase_cost) });
 
+      if (row.target_stock!==undefined&&row.target_stock!==''&&parseFloat(row.target_stock)!==(item.target_stock!=null?parseFloat(item.target_stock):NaN)) fc.fields.push({ field:'target_stock', label:'Target Stock (display only)', current:item.target_stock!=null?parseFloat(item.target_stock):'—', new:parseFloat(row.target_stock) });
       if (row.uom!==undefined&&row.uom!==''&&row.uom!==item.uom) fc.fields.push({ field:'uom', label:'UOM (display only)', current:item.uom, new:row.uom });
       if (row.description!==undefined&&row.description!==''&&row.description!==(item.description||'')) fc.fields.push({ field:'description', label:'Description', current:item.description||'', new:row.description });
       if (fc.fields.length > 0) { fc.status = 'changed'; changes.push(fc); }
@@ -1445,6 +1508,9 @@ app.post('/api/proclean/bulk-apply', async (req, res) => {
       if (fm.purchase_cost !== undefined) {
         const qd = await qboGet('company1','item/'+item.qbo_id);
         if (qd.Item) { const co=appData.companies['company1'],tk=await getAccessToken('company1'); const r=await fetch(`${QBO_BASE}/${co.realmId}/item`,{method:'POST',headers:{'Authorization':'Bearer '+tk,'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({...qd.Item,PurchaseCost:fm.purchase_cost})}); const rd=await r.json(); if(!rd.Fault) await pool.query('UPDATE proclean_items SET purchase_cost=$1,sync_token=$2 WHERE qbo_id=$3',[fm.purchase_cost,rd.Item.SyncToken,item.qbo_id]); }
+      }
+      if (fm.target_stock!==undefined) {
+        await pool.query('UPDATE proclean_items SET target_stock=$1,last_updated_by=$2 WHERE qbo_id=$3',[fm.target_stock,'bulk_upload',item.qbo_id]);
       }
       if (fm.uom!==undefined) {
         await pool.query('UPDATE proclean_items SET uom=$1,last_updated_by=$2 WHERE qbo_id=$3',[fm.uom,'bulk_upload',item.qbo_id]);
@@ -1892,73 +1958,24 @@ app.post('/api/pk/shipments/:id/zero-out', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET export Pakistan inventory as CSV
-app.get('/api/pk/export', async (req, res) => {
-  try {
-    const [itemsRes, shipmentsRes, shipmentItemsRes, atlRes] = await Promise.all([
-      pool.query('SELECT * FROM pk_inventory ORDER BY pk_name ASC'),
-      pool.query('SELECT * FROM pk_shipments ORDER BY created_at ASC'),
-      pool.query('SELECT * FROM pk_shipment_items'),
-      pool.query("SELECT name, sku, qty_on_hand FROM proclean_items WHERE item_type = 'Inventory'"),
-    ]);
-
-    const atlMap = {};
-    for (const r of atlRes.rows) {
-      atlMap[r.name.toUpperCase()] = parseFloat(r.qty_on_hand) || 0;
-      if (r.sku) atlMap[r.sku.toUpperCase()] = parseFloat(r.qty_on_hand) || 0;
-    }
-
-    const shipItemMap = {};
-    for (const si of shipmentItemsRes.rows) {
-      if (!shipItemMap[si.shipment_id]) shipItemMap[si.shipment_id] = {};
-      shipItemMap[si.shipment_id][si.pk_name] = parseFloat(si.quantity) || 0;
-    }
-
-    const shipHeaders = shipmentsRes.rows.map(s => `"${s.name} (ETA: ${s.eta ? new Date(s.eta).toLocaleDateString('en-US') : 'TBD'})"`).join(',');
-    const header = `Item Name,ProClean Name,UOM,Qty in Pakistan,${shipHeaders},Total On Water,Atlanta (ATL) Qty,Target ATL Stock,Hot Item,Notes\n`;
-
-    const rows = itemsRes.rows.map(item => {
-      const lookupName = (item.proclean_name || item.pk_name).toUpperCase();
-      const atl = atlMap[lookupName] ?? '';
-      const shipQtys = shipmentsRes.rows.map(s => shipItemMap[s.id]?.[item.pk_name] || 0);
-      const totalOnWater = shipQtys.reduce((a, b) => a + b, 0);
-      return [
-        `"${item.pk_name}"`,
-        `"${item.proclean_name || ''}"`,
-        item.uom,
-        item.qty_in_pakistan || 0,
-        ...shipQtys,
-        totalOnWater,
-        atl,
-        item.target_stock !== null && item.target_stock !== undefined ? item.target_stock : '',
-        item.is_hot ? 'YES' : '',
-        `"${(item.notes || '').replace(/"/g, '""')}"`,
-      ].join(',');
-    }).join('\n');
-
-    const date = new Date().toISOString().split('T')[0];
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="Pakistan_Inventory_${date}.csv"`);
-    res.send(header + rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
 
 // Export routes outside auth middleware (browser download links can't send JWT headers)
 app.get('/export/proclean', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT name, sku, uom, qty_on_hand, unit_price, purchase_cost,
+      SELECT name, sku, uom, qty_on_hand, target_stock, unit_price, purchase_cost,
              (qty_on_hand * unit_price) as sale_value,
              (qty_on_hand * purchase_cost) as cost_value,
              last_synced, last_updated_by
       FROM proclean_items WHERE item_type = 'Inventory' ORDER BY name ASC
     `);
-    const header = 'Item Name,SKU,UOM,Qty On Hand,Sale Price,Cost Price,Sale Value,Cost Value,Last Synced,Last Updated By\n';
+    const header = 'Item Name,SKU,UOM,Qty On Hand,Target Stock,Sale Price,Cost Price,Sale Value,Cost Value,Last Synced,Last Updated By\n';
     const rows = result.rows.map(r => [
       `"${(r.name||'').replace(/"/g,'""')}"`,
       `"${(r.sku||'').replace(/"/g,'""')}"`,
       r.uom || '',
       r.qty_on_hand || 0,
+      r.target_stock != null ? r.target_stock : '',
       parseFloat(r.unit_price || 0).toFixed(2),
       parseFloat(r.purchase_cost || 0).toFixed(2),
       parseFloat(r.sale_value || 0).toFixed(2),
