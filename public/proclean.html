@@ -199,6 +199,19 @@
     .inv-sku { font-size: 11px; color: var(--text3); font-family: var(--mono); }
     .inv-uom { font-family: var(--mono); font-size: 12px; color: var(--text3); }
     .inv-qty { font-family: var(--mono); font-size: 14px; font-weight: 600; }
+    .target-input {
+      width: 72px; padding: 5px 8px; text-align: center;
+      font-family: var(--mono); font-size: 13px; font-weight: 600;
+      color: var(--text2); background: var(--surface); cursor: text;
+      border: 1px solid var(--border); border-radius: 6px; outline: none;
+      transition: border-color 0.12s, color 0.12s;
+      -moz-appearance: textfield;
+    }
+    .target-input::-webkit-outer-spin-button,
+    .target-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    .target-input:focus { border-color: var(--blue); color: var(--text); }
+    .target-input.below { color: var(--red); border-color: var(--red); }
+    .target-input.saved { border-color: var(--green); }
     .qty-ok { color: var(--green); }
     .qty-negative { color: var(--red); }
     .qty-zero { color: var(--text3); }
@@ -530,8 +543,8 @@
         </div>
       </div>
       <div class="inv-table">
-        <div class="inv-thead" style="grid-template-columns: 2fr 1fr 110px 110px 110px 110px 110px 36px">
-          <div>Item</div><div>UOM</div><div>Quantity</div><div>Sale Price</div><div>Cost Price</div><div>Value</div><div>Status</div><div></div>
+        <div class="inv-thead" style="grid-template-columns: 2fr 1fr 110px 110px 110px 110px 110px 110px 36px">
+          <div>Item</div><div>UOM</div><div>Quantity</div><div>Target</div><div>Sale Price</div><div>Cost Price</div><div>Value</div><div>Status</div><div></div>
         </div>
         <div id="inv-body"><div class="loading"><div class="spinner"></div> Loading…</div></div>
       </div>
@@ -801,6 +814,38 @@ function getStatus(qty) {
   return 'ok';
 }
 
+const _debounceTimers = {};
+function debounce(key, fn, delay = 1500) {
+  clearTimeout(_debounceTimers[key]);
+  _debounceTimers[key] = setTimeout(fn, delay);
+}
+
+async function saveTarget(qboId, value, inputEl) {
+  try {
+    const res = await apiFetch('/api/proclean/items/' + encodeURIComponent(qboId) + '/target', {
+      method: 'PATCH',
+      body: JSON.stringify({ target_stock: value === '' ? null : parseFloat(value) })
+    });
+    // Update local cache so re-renders keep the new value
+    const it = allItems.find(i => i.qbo_id === qboId);
+    if (it) it.target_stock = (value === '' ? null : parseFloat(value));
+    // Brief green confirmation, then recolor against current qty
+    if (inputEl) {
+      inputEl.classList.add('saved');
+      setTimeout(() => {
+        inputEl.classList.remove('saved');
+        if (it) {
+          const below = it.target_stock != null && parseFloat(it.qty_on_hand) < it.target_stock;
+          inputEl.classList.toggle('below', below);
+        }
+      }, 900);
+    }
+  } catch (e) {
+    if (inputEl) { inputEl.style.borderColor = 'var(--red)'; }
+    console.error('Save target error:', e);
+  }
+}
+
 function renderInventory() {
   const search = (document.getElementById('search-input').value || '').toLowerCase();
   const filtered = allItems.filter(i => {
@@ -826,13 +871,20 @@ function renderInventory() {
     const statusBadge = status === 'ok' ? `<span class="status-badge status-ok">● In Stock</span>`
       : status === 'neg' ? `<span class="status-badge status-neg">● Negative</span>`
       : `<span class="status-badge status-zero">● Zero</span>`;
-    return `<div class="inv-row" style="grid-template-columns: 2fr 1fr 110px 110px 110px 110px 110px 36px" onclick="openDetail('${i.qbo_id}')">
+    const target = i.target_stock != null && i.target_stock !== '' ? parseFloat(i.target_stock) : null;
+    const belowTarget = target != null && qty < target;
+    return `<div class="inv-row" style="grid-template-columns: 2fr 1fr 110px 110px 110px 110px 110px 110px 36px" onclick="openDetail('${i.qbo_id}')">
       <div class="inv-name-col">
         <span class="inv-name">${i.name}</span>
         ${i.sku ? `<span class="inv-sku">${i.sku}</span>` : ''}
       </div>
       <div class="inv-uom">${i.uom || '—'}</div>
       <div class="inv-qty ${qtyClass}">${qty}</div>
+      <div class="inv-qty" onclick="event.stopPropagation()">
+        <input class="target-input ${belowTarget ? 'below' : ''}" type="number" min="0" step="1"
+               value="${target != null ? target : ''}" placeholder="—"
+               oninput="debounce('target_${i.qbo_id}', () => saveTarget('${i.qbo_id}', this.value, this), 1500)" />
+      </div>
       <div class="inv-qty" style="color:var(--text2)">${price > 0 ? '$' + price.toFixed(2) : '—'}</div>
       <div class="inv-qty" style="color:var(--text2)">${cost > 0 ? '$' + cost.toFixed(2) : '—'}</div>
       <div class="inv-qty ${valueClass}">${price > 0 ? '$' + value.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—'}</div>
@@ -1271,7 +1323,7 @@ function openProCleanFilePicker() { closeUploadInstructions(); document.getEleme
 function openPakistanFilePicker() { closeUploadInstructions(); document.getElementById('pakistan-file-input-pc').click(); }
 
 function parseCsv(text){const lines=text.trim().split('\n');const headers=lines[0].split(',').map(h=>h.replace(/"/g,'').trim().toLowerCase().replace(/ /g,'_').replace(/[(]/g,'').replace(/[)]/g,''));return lines.slice(1).map(line=>{const vals=[];let cur='',inQ=false;for(const ch of line){if(ch==='"')inQ=!inQ;else if(ch===','&&!inQ){vals.push(cur.trim());cur='';}else cur+=ch;}vals.push(cur.trim());const row={};headers.forEach((h,i)=>row[h]=vals[i]||'');return row;});}
-async function handleProCleanUpload(event){const file=event.target.files[0];if(!file)return;const text=await file.text();const rows=parseCsv(text).map(r=>({name:r.item_name||r.name||'',sku:r.sku||'',qty_on_hand:r.qty_on_hand!==''?r.qty_on_hand:undefined,unit_price:r.sale_price!==''?r.sale_price:undefined,purchase_cost:r.cost_price!==''?r.cost_price:undefined,uom:r.uom||undefined,description:r.sales_description||r.description||undefined}));event.target.value='';try{const res=await apiFetch('/api/proclean/bulk-preview',{method:'POST',body:JSON.stringify({rows})});showBulkModal(res.changes,'proclean');}catch(e){alert('Error: '+e.message);}}
+async function handleProCleanUpload(event){const file=event.target.files[0];if(!file)return;const text=await file.text();const rows=parseCsv(text).map(r=>({name:r.item_name||r.name||'',sku:r.sku||'',qty_on_hand:r.qty_on_hand!==''?r.qty_on_hand:undefined,target_stock:(r.target_stock!==undefined&&r.target_stock!=='')?r.target_stock:undefined,unit_price:r.sale_price!==''?r.sale_price:undefined,purchase_cost:r.cost_price!==''?r.cost_price:undefined,uom:r.uom||undefined,description:r.sales_description||r.description||undefined}));event.target.value='';try{const res=await apiFetch('/api/proclean/bulk-preview',{method:'POST',body:JSON.stringify({rows})});showBulkModal(res.changes,'proclean');}catch(e){alert('Error: '+e.message);}}
 function showBulkModal(changes,type){pendingBulkChanges=changes;document.getElementById('bulk-modal').style.display='flex';const valid=changes.filter(c=>c.status==='changed'),notFound=changes.filter(c=>c.status==='not_found');document.getElementById('bulk-apply-btn').dataset.type=type;if(valid.length===0&&notFound.length===0){document.getElementById('bulk-modal-body').innerHTML='<div style="text-align:center;padding:40px;color:var(--text3)">No changes detected.</div>';document.getElementById('bulk-apply-btn').style.display='none';return;}document.getElementById('bulk-apply-btn').style.display='block';let html='';if(valid.length>0){html+='<div style="font-size:13px;font-weight:600;margin-bottom:12px">'+valid.length+' item(s) with changes:</div>';html+='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:var(--surface2)"><th style="padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)">Item</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)">Field</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)">Current</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)">New</th></tr></thead><tbody>';for(const c of valid)for(const f of c.fields)html+=`<tr style="border-bottom:1px solid var(--border)"><td style="padding:8px 12px;font-weight:500">${c.name||c.pk_name}</td><td style="padding:8px 12px;color:var(--text2)">${f.label}</td><td style="padding:8px 12px;font-family:var(--mono);color:var(--text3)">${f.current}</td><td style="padding:8px 12px;font-family:var(--mono);color:var(--green);font-weight:600">${f.new}</td></tr>`;html+='</tbody></table>';}if(notFound.length>0)html+='<div style="margin-top:16px;font-size:12px;color:var(--text3)">'+notFound.length+' not found: '+notFound.map(c=>c.identifier||c.pk_name).join(', ')+'</div>';document.getElementById('bulk-modal-body').innerHTML=html;}
 async function applyBulkUpload(){const btn=document.getElementById('bulk-apply-btn'),type=btn.dataset.type,valid=pendingBulkChanges.filter(c=>c.status==='changed');btn.textContent='Applying...';btn.disabled=true;try{const ep=type==='proclean'?'/api/proclean/bulk-apply':'/api/pk/bulk-apply';const res=await apiFetch(ep,{method:'POST',body:JSON.stringify({changes:valid})});closeBulkModal();if(type==='proclean'){await loadInventory();await loadDashboard();}alert('Done - '+res.success+' updated'+(res.failed>0?', '+res.failed+' failed':'')+('.'))}catch(e){alert('Error: '+e.message);}finally{btn.textContent='Apply Changes';btn.disabled=false;}}
 function closeBulkModal(){document.getElementById('bulk-modal').style.display='none';pendingBulkChanges=[];}
@@ -1308,6 +1360,7 @@ function closeBulkModal(){document.getElementById('bulk-modal').style.display='n
           <tr style="background:var(--surface2)"><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Sale Price</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the selling price</td><td style="padding:7px 10px;border:1px solid var(--border);color:var(--green)">Yes — ProClean QBO</td></tr>
           <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Cost Price</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the purchase cost</td><td style="padding:7px 10px;border:1px solid var(--border);color:var(--green)">Yes — ProClean QBO</td></tr>
           <tr style="background:var(--surface2)"><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">UOM</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates how the unit is displayed on the website only</td><td style="padding:7px 10px;border:1px solid var(--border);color:#744210">Website only — not QBO</td></tr>
+          <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Target Stock</td><td style="padding:7px 10px;border:1px solid var(--border)">Sets the target stock level shown next to quantity</td><td style="padding:7px 10px;border:1px solid var(--border);color:#744210">Website only — not QBO</td></tr>
           <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Sales Description</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the sales description</td><td style="padding:7px 10px;border:1px solid var(--border);color:var(--green)">Yes — all 3 companies</td></tr>
         </tbody>
       </table>
