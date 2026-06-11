@@ -493,6 +493,21 @@
     </div>
   </header>
 
+  <!-- Deduction failure banner (hidden unless there are unresolved failures) -->
+  <div id="deduction-banner" style="display:none; background:#2d0a0a; border:1px solid #c53030; border-radius:10px; padding:16px 20px; margin-bottom:20px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span style="font-size:20px;">⚠️</span>
+        <span style="color:#fc8181; font-weight:700; font-size:15px; letter-spacing:0.02em;">
+          <span id="deduction-count">0</span> inventory deduction(s) failed — ProClean stock was NOT updated
+        </span>
+      </div>
+      <button onclick="clearAllFailures()" style="background:transparent; border:1px solid #c53030; color:#fc8181; padding:5px 14px; border-radius:6px; font-family:var(--mono); font-size:11px; cursor:pointer; letter-spacing:0.05em;">Clear All</button>
+    </div>
+    <div style="color:#feb2b2; font-size:12px; margin-bottom:12px;">Correct the quantity manually in QuickBooks, then clear each item once handled.</div>
+    <div id="deduction-list"></div>
+  </div>
+
   <!-- Stats -->
   <div class="stats-row">
     <div class="stat-card green">
@@ -585,6 +600,54 @@
 <script>
   let webhookUrl = '';
 
+  function renderDeductionFailures(failures) {
+    const banner = document.getElementById('deduction-banner');
+    const list = document.getElementById('deduction-list');
+    const count = document.getElementById('deduction-count');
+    if (!failures || failures.length === 0) {
+      banner.style.display = 'none';
+      list.innerHTML = '';
+      return;
+    }
+    count.textContent = failures.length;
+    banner.style.display = 'block';
+    list.innerHTML = failures.map(function (f) {
+      var when = f.at ? new Date(f.at).toLocaleString('en-US', { timeZone: 'America/New_York' }) : '';
+      return '<div style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 0; border-top:1px solid #4a1010;">' +
+        '<div style="font-size:13px; color:#fed7d7;">' +
+          '<b>' + (f.itemName || '?') + '</b> ×' + (f.qty != null ? f.qty : '?') +
+          ' · <span style="color:#fc8181;">' + (f.sourceCompany || '') + '</span>' +
+          ' · ' + (f.invoiceLabel || '') +
+          '<div style="color:#feb2b2; font-size:11px; margin-top:2px;">' + (f.reason || '') + ' · ' + when + '</div>' +
+        '</div>' +
+        '<button onclick="clearFailure(\'' + f.id + '\')" style="background:transparent; border:1px solid #4a1010; color:#fc8181; padding:4px 10px; border-radius:6px; font-family:var(--mono); font-size:10px; cursor:pointer; white-space:nowrap;">Mark handled</button>' +
+      '</div>';
+    }).join('');
+  }
+
+  async function clearFailure(id) {
+    try {
+      await fetch('/api/deduction-failures/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: id })
+      });
+      loadData();
+    } catch (e) { console.error('clearFailure failed', e); }
+  }
+
+  async function clearAllFailures() {
+    if (!confirm('Clear all deduction failure alerts? Only do this once the stock has been corrected in QuickBooks.')) return;
+    try {
+      await fetch('/api/deduction-failures/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      loadData();
+    } catch (e) { console.error('clearAllFailures failed', e); }
+  }
+
   async function loadData() {
     try {
       const [statusRes, logsRes] = await Promise.all([
@@ -601,6 +664,9 @@
   }
 
   function renderStatus(status) {
+    // Deduction failure banner
+    renderDeductionFailures(status.deductionFailures || []);
+
     // Stats
     document.getElementById('stat-synced').textContent = status.stats?.totalSynced ?? 0;
     document.getElementById('stat-errors').textContent = status.stats?.errors ?? 0;
