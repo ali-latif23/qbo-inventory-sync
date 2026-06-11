@@ -39,13 +39,6 @@ async function initDb() {
       transaction_type TEXT NOT NULL,
       processed_at TIMESTAMPTZ DEFAULT NOW()
     );
-    CREATE TABLE IF NOT EXISTS app_inventory (
-      item_name TEXT PRIMARY KEY,
-      sku TEXT,
-      qty_on_hand NUMERIC NOT NULL DEFAULT 0,
-      last_updated TIMESTAMPTZ DEFAULT NOW(),
-      last_updated_by TEXT DEFAULT 'system'
-    );
     CREATE TABLE IF NOT EXISTS proclean_items (
       qbo_id TEXT PRIMARY KEY,
       sync_token TEXT NOT NULL DEFAULT '0',
@@ -108,23 +101,6 @@ async function initDb() {
   await pool.query(`ALTER TABLE proclean_movements ALTER COLUMN qbo_id DROP NOT NULL;`);
   console.log('✅ Database initialized');
 }
-
-async function appInventoryAdjust(itemName, delta, reason) {
-  try {
-    await pool.query(`
-      INSERT INTO app_inventory (item_name, qty_on_hand, last_updated, last_updated_by)
-      VALUES ($1, $2, NOW(), $3)
-      ON CONFLICT (item_name) DO UPDATE
-        SET qty_on_hand = app_inventory.qty_on_hand + $2,
-            last_updated = NOW(),
-            last_updated_by = $3
-    `, [itemName, delta, reason]);
-  } catch (err) {
-    console.error(`App inventory adjust error for ${itemName}:`, err.message);
-  }
-}
-
-
 
 async function isAlreadyProcessed(companyKey, transactionType, transactionId) {
   const key = `${companyKey}_${transactionType}_${transactionId}`;
@@ -250,10 +226,6 @@ function getCompanyByRealmId(realmId) {
   return Object.entries(appData.companies).find(([, c]) => c.realmId === realmId);
 }
 
-function getMasterCompany() {
-  return appData.companies['company1'];
-}
-
 // ─── OAUTH TOKEN MANAGEMENT ──────────────────────────────────────────────────
 async function refreshToken(companyKey) {
   const company = appData.companies[companyKey];
@@ -298,28 +270,14 @@ async function getAccessToken(companyKey) {
 async function qboGet(companyKey, endpoint) {
   const company = appData.companies[companyKey];
   const token = await getAccessToken(companyKey);
-  const url = `${QBO_BASE}/${company.realmId}/${endpoint}`;
+  // minorversion=75 is the current minimum supported version (Intuit deprecated 1–74 in Aug 2025)
+  const sep = endpoint.includes('?') ? '&' : '?';
+  const url = `${QBO_BASE}/${company.realmId}/${endpoint}${sep}minorversion=75`;
   const res = await fetch(url, {
     headers: {
       'Authorization': `Bearer ${token}`,
       'Accept': 'application/json'
     }
-  });
-  return res.json();
-}
-
-async function qboPost(companyKey, endpoint, body) {
-  const company = appData.companies[companyKey];
-  const token = await getAccessToken(companyKey);
-  const url = `${QBO_BASE}/${company.realmId}/${endpoint}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    },
-    body: JSON.stringify(body)
   });
   return res.json();
 }
@@ -351,11 +309,6 @@ async function getInvoiceWithRetry(companyKey, invoiceId, retries = 3, delayMs =
     }
   }
   return null;
-}
-
-async function getItem(companyKey, itemId) {
-  const data = await qboGet(companyKey, `item/${itemId}`);
-  return data.Item;
 }
 
 async function queryItems(companyKey, name) {
@@ -475,7 +428,6 @@ async function processInvoiceSync(sourceCompanyKey, invoiceId) {
           docNumber: invoice.DocNumber || invoiceId,
           sourceCompany: sourceCompany.name
         });
-        await appInventoryAdjust(itemName, -qty, `invoice:${invoiceId}:${sourceCompany.name}`);
         // Update proclean_items tracker
         try {
           await pool.query(
@@ -530,7 +482,6 @@ async function processInvoiceSyncAppOnly(invoiceId) {
     if (!itemName) continue;
     const qty = detail.Qty || 0;
     if (qty <= 0) continue;
-    await appInventoryAdjust(itemName, -qty, `invoice:${invoiceId}:ProClean`);
     // Log for visibility only — QBO handles actual inventory natively, no qty change here.
     // Logs even when the item isn't matched in proclean_items (qbo_id NULL) so no movements go missing.
     try {
@@ -570,7 +521,6 @@ async function processBillAppOnly(billId) {
     if (!itemName) continue;
     const qty = detail.Qty || 0;
     if (qty <= 0) continue;
-    await appInventoryAdjust(itemName, qty, `bill:${billId}:ProClean`);
     // Log for visibility only — QBO handles actual inventory natively, no qty change here.
     // Logs even when the item isn't matched in proclean_items (qbo_id NULL) so no movements go missing.
     try {
@@ -603,7 +553,51 @@ app.post('/webhook', async (req, res) => {
 
   try {
     const data = JSON.parse(payload.toString());
-    const notifications = data.eventNotifications || [];
+
+    // ── Format normalizer ──────────────────────────────────────────────────────
+    // QBO is migrating webhooks to CloudEvents format (mandatory by July 31 2026).
+    //
+    // Legacy format  → root is an object: { eventNotifications: [ { realmId, dataChangeEvent } ] }
+    // CloudEvents    → root is an array:  [ { specversion, intuitaccountid, intuitentityid, type } ]
+    //
+    // We normalise both into the same internal shape so the processing code below
+    // is unchanged regardless of which format QBO sends.
+    //
+    // CloudEvents type examples:
+    //   "qbo.invoice.created.v1"  → name: "Invoice",  operation: "Create"
+    //   "qbo.invoice.updated.v1"  → name: "Invoice",  operation: "Update"
+    //   "qbo.bill.created.v1"     → name: "Bill",     operation: "Create"
+    let notifications;
+
+    if (Array.isArray(data)) {
+      // ── CloudEvents format ─────────────────────────────────────────────────
+      // One notification per event; group by realmId (intuitaccountid) so the
+      // loop below sees the same shape as legacy.
+      const byRealm = {};
+      for (const event of data) {
+        const realmId = String(event.intuitaccountid || '');
+        const type    = event.type || '';           // e.g. "qbo.invoice.created.v1"
+        const id      = String(event.intuitentityid || '');
+
+        // Parse "qbo.<entity>.<operation>.v1"
+        const parts = type.split('.');
+        if (parts.length < 3 || parts[0] !== 'qbo') continue;
+
+        const entityName = parts[1].charAt(0).toUpperCase() + parts[1].slice(1); // "Invoice"
+        const opWord     = parts[2];                                               // "created" | "updated" | "deleted"
+        const operation  = opWord === 'created' ? 'Create'
+                         : opWord === 'updated' ? 'Update'
+                         : opWord === 'deleted' ? 'Delete'
+                         : opWord;
+
+        if (!byRealm[realmId]) byRealm[realmId] = { realmId, dataChangeEvent: { entities: [] } };
+        byRealm[realmId].dataChangeEvent.entities.push({ name: entityName, operation, id });
+      }
+      notifications = Object.values(byRealm);
+    } else {
+      // ── Legacy format ──────────────────────────────────────────────────────
+      notifications = data.eventNotifications || [];
+    }
 
     for (const notification of notifications) {
       const realmId = notification.realmId;
@@ -788,105 +782,11 @@ app.post('/api/test-sync', async (req, res) => {
   }
 });
 
-// ─── APP INVENTORY API ────────────────────────────────────────────────────────
-
-
-app.get('/api/export-csv', async (req, res) => {
-  try {
-    const since = req.query.since || '2026-05-12';
-    const sinceDate = new Date(since + 'T00:00:00Z').toISOString();
-
-    const rows = [];
-
-    // Fetch invoices from all 3 companies
-    for (const companyKey of ['company1', 'company2', 'company3']) {
-      const company = appData.companies[companyKey];
-      if (!company?.tokens) continue;
-      const companyName = company.name || companyKey;
-
-      try {
-        const encoded = encodeURIComponent(`SELECT * FROM Invoice WHERE TxnDate >= '${since}' MAXRESULTS 200`);
-        const data = await qboGet(companyKey, `query?query=${encoded}`);
-        const invoices = data.QueryResponse?.Invoice || [];
-
-        for (const inv of invoices) {
-          const lineItems = inv.Line?.filter(l => l.DetailType === 'SalesItemLineDetail') || [];
-          for (const line of lineItems) {
-            const detail = line.SalesItemLineDetail;
-            const itemName = detail?.ItemRef?.name;
-            if (!itemName) continue;
-            const qty = detail.Qty || 0;
-            rows.push({
-              date: inv.TxnDate,
-              type: 'Invoice',
-              number: inv.DocNumber || inv.Id,
-              company: companyName,
-              item: itemName,
-              qty_out: qty,
-              qty_in: '',
-            });
-          }
-        }
-      } catch (err) {
-        console.error(`Error fetching invoices for ${companyKey}:`, err.message);
-      }
-    }
-
-    // Fetch bills from ProClean only
-    try {
-      const company1 = appData.companies['company1'];
-      if (company1?.tokens) {
-        const encoded = encodeURIComponent(`SELECT * FROM Bill WHERE TxnDate >= '${since}' MAXRESULTS 200`);
-        const data = await qboGet('company1', `query?query=${encoded}`);
-        const bills = data.QueryResponse?.Bill || [];
-
-        for (const bill of bills) {
-          const lineItems = bill.Line?.filter(l => l.DetailType === 'ItemBasedExpenseLineDetail') || [];
-          for (const line of lineItems) {
-            const detail = line.ItemBasedExpenseLineDetail;
-            const itemName = detail?.ItemRef?.name;
-            if (!itemName) continue;
-            const qty = detail.Qty || 0;
-            rows.push({
-              date: bill.TxnDate,
-              type: 'Bill',
-              number: bill.DocNumber || bill.Id,
-              company: company1.name || 'ProClean',
-              item: itemName,
-              qty_out: '',
-              qty_in: qty,
-            });
-          }
-        }
-      }
-    } catch (err) {
-      console.error('Error fetching bills:', err.message);
-    }
-
-    // Sort by date
-    rows.sort((a, b) => a.date.localeCompare(b.date));
-
-    // Build CSV
-    const header = 'Date,Type,Number,Company,Item,Qty Out (Sold),Qty In (Restocked)\n';
-    const csv = header + rows.map(r =>
-      `${r.date},${r.type},${r.number},"${r.company}","${r.item}",${r.qty_out},${r.qty_in}`
-    ).join('\n');
-
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="inventory-movement-since-${since}.csv"`);
-    res.send(csv);
-
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-
 app.get('/eula', (req, res) => {
   res.send(`<!DOCTYPE html><html><head><title>EULA - Inventory Sync</title>
   <style>body{font-family:sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.6;color:#333}</style></head>
   <body><h1>End-User License Agreement</h1><p><strong>Last updated: March 2026</strong></p>
-  <p>This End-User License Agreement ("Agreement") is between your company ("User") and the operator of this Inventory Sync application ("App").</p>
+  <p>This End-User License Agreement (\"Agreement\") is between your company (\"User\") and the operator of this Inventory Sync application (\"App\").</p>
   <h2>1. License</h2><p>This App is licensed for internal business use only. You may not redistribute, resell, or sublicense the App.</p>
   <h2>2. Use of QuickBooks Data</h2><p>This App connects to QuickBooks Online via the Intuit API solely to read invoice and purchase order data and update inventory quantities across your connected companies.</p>
   <h2>3. Data Storage</h2><p>OAuth tokens and sync logs are stored securely in a private database. No financial data is stored beyond what is necessary for inventory sync operations.</p>
@@ -906,25 +806,6 @@ app.get('/privacy', (req, res) => {
   <h2>4. Third Parties</h2><p>This App uses the Intuit QuickBooks API. Your use of QuickBooks is subject to Intuit's own privacy policy at intuit.com.</p>
   <h2>5. Data Deletion</h2><p>You can remove all stored data by disconnecting your companies via the App dashboard. Contact your system administrator for full data deletion.</p>
   <h2>6. Contact</h2><p>For privacy questions, contact your internal IT or system administrator.</p></body></html>`);
-});
-
-app.get('/api/diagnose/:companyKey', async (req, res) => {
-  const { companyKey } = req.params;
-  try {
-    // List recent invoices
-    const encoded = encodeURIComponent('SELECT * FROM Invoice ORDERBY MetaData.CreateTime DESC MAXRESULTS 5');
-    const data = await qboGet(companyKey, `query?query=${encoded}`);
-    const invoices = data.QueryResponse?.Invoice || [];
-    res.json({
-      companyKey,
-      realmId: appData.companies[companyKey]?.realmId,
-      invoiceCount: invoices.length,
-      invoices: invoices.map(i => ({ id: i.Id, docNumber: i.DocNumber, total: i.TotalAmt, date: i.TxnDate })),
-      rawFault: data.Fault || null
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
 });
 
 app.post('/api/disconnect/:companyKey', (req, res) => {
@@ -1357,6 +1238,56 @@ app.post('/api/proclean/items/:qboId/deactivate', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// POST bulk make items inactive in QBO — receives array of qboIds, processes each,
+// returns per-item results. Used by the mass-inactivate feature on the inventory page.
+app.post('/api/proclean/items/bulk-deactivate', async (req, res) => {
+  const { qboIds } = req.body;
+  if (!qboIds || !Array.isArray(qboIds) || qboIds.length === 0) {
+    return res.status(400).json({ error: 'qboIds array required' });
+  }
+
+  const results = { success: [], failed: [] };
+
+  for (const qboId of qboIds) {
+    try {
+      const dbResult = await pool.query('SELECT * FROM proclean_items WHERE qbo_id = $1', [qboId]);
+      if (!dbResult.rows.length) {
+        results.failed.push({ qboId, reason: 'Not found in database' });
+        continue;
+      }
+      const item = dbResult.rows[0];
+
+      // Fetch the full live item from QBO to get a fresh SyncToken
+      const qboData = await qboGet('company1', 'item/' + qboId);
+      if (!qboData.Item) {
+        results.failed.push({ qboId, name: item.name, reason: 'Could not fetch from QBO' });
+        continue;
+      }
+
+      const company = appData.companies['company1'];
+      const token = await getAccessToken('company1');
+      const r = await fetch(`${QBO_BASE}/${company.realmId}/item`, {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ ...qboData.Item, Active: false })
+      });
+      const data = await r.json();
+
+      if (data.Fault) {
+        results.failed.push({ qboId, name: item.name, reason: JSON.stringify(data.Fault) });
+        continue;
+      }
+
+      await pool.query('DELETE FROM proclean_items WHERE qbo_id = $1', [qboId]);
+      results.success.push({ qboId, name: item.name });
+    } catch (err) {
+      results.failed.push({ qboId, reason: err.message });
+    }
+  }
+
+  res.json(results);
+});
+
 
 // GET export Production (Pakistan) inventory as Excel - no prices
 app.get('/export/production', async (req, res) => {
@@ -1507,28 +1438,70 @@ app.post('/api/proclean/bulk-apply', async (req, res) => {
         item = { ...item, sync_token: upd.rows[0].sync_token };
       }
       if (fm.unit_price !== undefined) {
-        const qd = await qboGet('company1','item/'+item.qbo_id);
-        if (qd.Item) { const co=appData.companies['company1'],tk=await getAccessToken('company1'); const r=await fetch(`${QBO_BASE}/${co.realmId}/item`,{method:'POST',headers:{'Authorization':'Bearer '+tk,'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({...qd.Item,UnitPrice:fm.unit_price})}); const rd=await r.json(); if(!rd.Fault) await pool.query('UPDATE proclean_items SET unit_price=$1,sync_token=$2 WHERE qbo_id=$3',[fm.unit_price,rd.Item.SyncToken,item.qbo_id]); }
+        const qd = await qboGet('company1', 'item/' + item.qbo_id);
+        if (qd.Item) {
+          const co = appData.companies['company1'];
+          const tk = await getAccessToken('company1');
+          const r = await fetch(`${QBO_BASE}/${co.realmId}/item`, {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + tk, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ ...qd.Item, UnitPrice: fm.unit_price })
+          });
+          const rd = await r.json();
+          if (!rd.Fault) await pool.query('UPDATE proclean_items SET unit_price=$1, sync_token=$2 WHERE qbo_id=$3', [fm.unit_price, rd.Item.SyncToken, item.qbo_id]);
+        }
       }
       if (fm.purchase_cost !== undefined) {
-        const qd = await qboGet('company1','item/'+item.qbo_id);
-        if (qd.Item) { const co=appData.companies['company1'],tk=await getAccessToken('company1'); const r=await fetch(`${QBO_BASE}/${co.realmId}/item`,{method:'POST',headers:{'Authorization':'Bearer '+tk,'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({...qd.Item,PurchaseCost:fm.purchase_cost})}); const rd=await r.json(); if(!rd.Fault) await pool.query('UPDATE proclean_items SET purchase_cost=$1,sync_token=$2 WHERE qbo_id=$3',[fm.purchase_cost,rd.Item.SyncToken,item.qbo_id]); }
-      }
-      if (fm.target_stock!==undefined) {
-        await pool.query('UPDATE proclean_items SET target_stock=$1,last_updated_by=$2 WHERE qbo_id=$3',[fm.target_stock,'bulk_upload',item.qbo_id]);
-      }
-      if (fm.uom!==undefined) {
-        await pool.query('UPDATE proclean_items SET uom=$1,last_updated_by=$2 WHERE qbo_id=$3',[fm.uom,'bulk_upload',item.qbo_id]);
-      }
-      if (fm.description!==undefined) {
-        const qd=await qboGet('company1','item/'+item.qbo_id);
+        const qd = await qboGet('company1', 'item/' + item.qbo_id);
         if (qd.Item) {
-          const ub={...qd.Item,Description:fm.description};
-          const co1=appData.companies['company1'],tk1=await getAccessToken('company1');
-          await fetch(`${QBO_BASE}/${co1.realmId}/item`,{method:'POST',headers:{'Authorization':'Bearer '+tk1,'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify(ub)});
-          for (const ck of ['company2','company3']) { const co=appData.companies[ck]; if(!co?.tokens) continue; try { const enc=encodeURIComponent(`SELECT * FROM Item WHERE Name = '${item.name.replace(/'/g,"\'")}' `); const sr=await qboGet(ck,`query?query=${enc}`); const fi=sr.QueryResponse?.Item?.[0]; if(fi){const tk=await getAccessToken(ck);await fetch(`${QBO_BASE}/${co.realmId}/item`,{method:'POST',headers:{'Authorization':'Bearer '+tk,'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({...fi,Description:fm.description})});} } catch(e){} }
+          const co = appData.companies['company1'];
+          const tk = await getAccessToken('company1');
+          const r = await fetch(`${QBO_BASE}/${co.realmId}/item`, {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + tk, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ ...qd.Item, PurchaseCost: fm.purchase_cost })
+          });
+          const rd = await r.json();
+          if (!rd.Fault) await pool.query('UPDATE proclean_items SET purchase_cost=$1, sync_token=$2 WHERE qbo_id=$3', [fm.purchase_cost, rd.Item.SyncToken, item.qbo_id]);
         }
-        await pool.query('UPDATE proclean_items SET description=$1,last_updated_by=$2 WHERE qbo_id=$3',[fm.description,'bulk_upload',item.qbo_id]);
+      }
+      if (fm.target_stock !== undefined) {
+        await pool.query('UPDATE proclean_items SET target_stock=$1, last_updated_by=$2 WHERE qbo_id=$3', [fm.target_stock, 'bulk_upload', item.qbo_id]);
+      }
+      if (fm.uom !== undefined) {
+        await pool.query('UPDATE proclean_items SET uom=$1, last_updated_by=$2 WHERE qbo_id=$3', [fm.uom, 'bulk_upload', item.qbo_id]);
+      }
+      if (fm.description !== undefined) {
+        const qd = await qboGet('company1', 'item/' + item.qbo_id);
+        if (qd.Item) {
+          const updatedBody = { ...qd.Item, Description: fm.description };
+          const co1 = appData.companies['company1'];
+          const tk1 = await getAccessToken('company1');
+          await fetch(`${QBO_BASE}/${co1.realmId}/item`, {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + tk1, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify(updatedBody)
+          });
+          // Mirror description update to company2 and company3
+          for (const ck of ['company2', 'company3']) {
+            const co = appData.companies[ck];
+            if (!co?.tokens) continue;
+            try {
+              const enc = encodeURIComponent(`SELECT * FROM Item WHERE Name = '${item.name.replace(/'/g, "\\'")}'`);
+              const sr = await qboGet(ck, `query?query=${enc}`);
+              const fi = sr.QueryResponse?.Item?.[0];
+              if (fi) {
+                const tk = await getAccessToken(ck);
+                await fetch(`${QBO_BASE}/${co.realmId}/item`, {
+                  method: 'POST',
+                  headers: { 'Authorization': 'Bearer ' + tk, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                  body: JSON.stringify({ ...fi, Description: fm.description })
+                });
+              }
+            } catch (e) { /* non-critical: description mirror failed for one company */ }
+          }
+        }
+        await pool.query('UPDATE proclean_items SET description=$1, last_updated_by=$2 WHERE qbo_id=$3', [fm.description, 'bulk_upload', item.qbo_id]);
       }
       results.success++;
     } catch(err) { results.failed++; results.errors.push(change.name+': '+err.message); }
@@ -1551,7 +1524,7 @@ app.post('/api/pk/bulk-preview', async (req, res) => {
       if (!item) { changes.push({ pk_name: pkName, status: 'not_found' }); continue; }
       const fc = { pk_name: item.pk_name, fields: [] };
       if (row.qty_in_pakistan!==undefined&&row.qty_in_pakistan!==''&&parseFloat(row.qty_in_pakistan)!==parseFloat(item.qty_in_pakistan)) fc.fields.push({ field:'qty_in_pakistan', label:'Qty in Pakistan', current:parseFloat(item.qty_in_pakistan), new:parseFloat(row.qty_in_pakistan) });
-      if (row.target_stock!==undefined&&row.target_stock!==''&&parseFloat(row.target_stock)!==parseFloat(item.target_stock||0)) fc.fields.push({ field:'target_stock', label:'Target ATL Stock', current:item.target_stock, new:parseFloat(row.target_stock) });
+      // target_stock intentionally excluded — it is now sourced read-only from proclean_items.target_stock
       if (row.notes!==undefined&&row.notes!==(item.notes||'')) fc.fields.push({ field:'notes', label:'Notes', current:item.notes||'', new:row.notes });
       if (row.is_hot!==undefined) { const nh=row.is_hot==='YES'||row.is_hot===true; if(nh!==item.is_hot) fc.fields.push({ field:'is_hot', label:'Hot Item', current:item.is_hot, new:nh }); }
       for (const ship of shipRes.rows) {
@@ -1576,7 +1549,7 @@ app.post('/api/pk/bulk-apply', async (req, res) => {
     try {
       for (const f of change.fields) {
         if (f.field==='qty_in_pakistan') await pool.query('UPDATE pk_inventory SET qty_in_pakistan=$1,last_updated=NOW() WHERE pk_name=$2',[f.new,change.pk_name]);
-        else if (f.field==='target_stock') await pool.query('UPDATE pk_inventory SET target_stock=$1,last_updated=NOW() WHERE pk_name=$2',[f.new,change.pk_name]);
+        // target_stock case removed — now sourced read-only from proclean_items
         else if (f.field==='notes') await pool.query('UPDATE pk_inventory SET notes=$1,last_updated=NOW() WHERE pk_name=$2',[f.new||null,change.pk_name]);
         else if (f.field==='is_hot') await pool.query('UPDATE pk_inventory SET is_hot=$1,last_updated=NOW() WHERE pk_name=$2',[f.new,change.pk_name]);
         else if (f.field.startsWith('shipment_')) await pool.query('INSERT INTO pk_shipment_items (shipment_id,pk_name,quantity) VALUES ($1,$2,$3) ON CONFLICT (shipment_id,pk_name) DO UPDATE SET quantity=$3',[f.shipment_id,change.pk_name,f.new]);
@@ -1830,14 +1803,20 @@ app.get('/api/pk/inventory', async (req, res) => {
       pool.query('SELECT * FROM pk_inventory ORDER BY pk_name ASC'),
       pool.query('SELECT * FROM pk_shipments ORDER BY created_at ASC'),
       pool.query('SELECT * FROM pk_shipment_items'),
-      pool.query("SELECT name, sku, qty_on_hand FROM proclean_items WHERE item_type = 'Inventory'"),
+      pool.query("SELECT name, sku, qty_on_hand, target_stock FROM proclean_items WHERE item_type = 'Inventory'"),
     ]);
 
-    // Build ATL lookup by name and sku
+    // Build ATL lookup by name and sku (both qty and target_stock come from ProClean)
     const atlMap = {};
+    const atlTargetMap = {};
     for (const r of atlRes.rows) {
-      atlMap[r.name.toUpperCase()] = parseFloat(r.qty_on_hand) || 0;
-      if (r.sku) atlMap[r.sku.toUpperCase()] = parseFloat(r.qty_on_hand) || 0;
+      const key = r.name.toUpperCase();
+      atlMap[key] = parseFloat(r.qty_on_hand) || 0;
+      atlTargetMap[key] = r.target_stock != null ? parseFloat(r.target_stock) : null;
+      if (r.sku) {
+        atlMap[r.sku.toUpperCase()] = parseFloat(r.qty_on_hand) || 0;
+        atlTargetMap[r.sku.toUpperCase()] = r.target_stock != null ? parseFloat(r.target_stock) : null;
+      }
     }
 
     // Build shipment items lookup: shipmentId -> pkName -> qty
@@ -1850,12 +1829,14 @@ app.get('/api/pk/inventory', async (req, res) => {
     const items = itemsRes.rows.map(item => {
       const lookupName = (item.proclean_name || item.pk_name).toUpperCase();
       const atl_qty = atlMap[lookupName] ?? null;
+      // target_stock is now sourced from proclean_items — it reflects what was set on the ProClean site
+      const target_stock = atlTargetMap[lookupName] ?? null;
       const shipments = shipmentsRes.rows.map(s => ({
         shipment_id: s.id,
         qty: shipItemMap[s.id]?.[item.pk_name] || 0
       }));
       const total_on_water = shipments.reduce((sum, s) => sum + s.qty, 0);
-      return { ...item, atl_qty, shipments, total_on_water };
+      return { ...item, atl_qty, target_stock, shipments, total_on_water };
     });
 
     res.json({ items, shipments: shipmentsRes.rows });
