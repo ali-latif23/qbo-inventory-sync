@@ -942,11 +942,16 @@ app.post('/api/disconnect/:companyKey', (req, res) => {
 // ─── PROCLEAN INVENTORY TRACKING ─────────────────────────────────────────────
 
 async function pcUpsertItem(item) {
+  // NOTE: uom is a website-only display field. It is set on INSERT (new items default
+  // to 'EACH') but intentionally NOT overwritten on UPDATE — otherwise the 5-minute
+  // QBO poller would wipe any UOM the user set on the website back to QBO's value
+  // (which is usually unset → 'EACH'). QBO is not the source of truth for UOM.
+  // target_stock is likewise excluded from this upsert so the poller never touches it.
   await pool.query(`
     INSERT INTO proclean_items (qbo_id, sync_token, name, sku, uom, qty_on_hand, unit_price, purchase_cost, description, item_type, last_synced, last_updated_by)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),'qbo')
     ON CONFLICT (qbo_id) DO UPDATE SET
-      sync_token = $2, name = $3, sku = $4, uom = $5,
+      sync_token = $2, name = $3, sku = $4,
       qty_on_hand = $6, unit_price = $7, purchase_cost = $8, description = $9, item_type = $10, last_synced = NOW(), last_updated_by = 'qbo'
   `, [item.Id, item.SyncToken, item.Name, item.Sku||'', item.UnitOfMeasureSetRef?.value||'EACH', item.QtyOnHand||0, item.UnitPrice||0, item.PurchaseCost||0, item.Description||null, item.Type]);
 }
