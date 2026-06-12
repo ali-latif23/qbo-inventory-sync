@@ -101,6 +101,14 @@ async function initDb() {
       last_updated TIMESTAMPTZ DEFAULT NOW(),
       PRIMARY KEY (company_key, customer_name)
     );
+    CREATE TABLE IF NOT EXISTS commission_adjustments (
+      company_key TEXT NOT NULL,
+      period_label TEXT NOT NULL,
+      shipping_cost NUMERIC NOT NULL DEFAULT 0,
+      cc_cost NUMERIC NOT NULL DEFAULT 0,
+      last_updated TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (company_key, period_label)
+    );
   `);
   // Migration: allow movement logging even when item isn't matched in proclean_items.
   // Old constraint (NOT NULL + FK) silently blocked logs for unmatched items.
@@ -161,12 +169,6 @@ async function saveField(key, value) {
     INSERT INTO app_state (key, value, updated_at) VALUES ($1, $2, NOW())
     ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
   `, [key, JSON.stringify(value)]);
-}
-
-// Generic single-key read from app_state, used for scheduler bookkeeping etc.
-async function getField(key, defaultValue = null) {
-  const res = await pool.query('SELECT value FROM app_state WHERE key = $1', [key]);
-  return res.rows.length ? res.rows[0].value : defaultValue;
 }
 
 async function saveData(data) {
@@ -2248,56 +2250,188 @@ app.get('/api/ap/company1', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// POST send a payment instruction email for a vendor.
-// amount_type: 'full' (pay the full outstanding balance) or 'specific' (pay req.body.amount)
-app.post('/api/ap/payment-instruction', async (req, res) => {
-  const { vendor_name, amount_type, amount } = req.body;
-  if (!vendor_name) return res.status(400).json({ error: 'vendor_name required' });
+// Builds an HTML table of bills for the payment instruction email
+function buildBillTableHtml(bills) {
+  return bills.map(b => `
+    <tr>
+      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-family:monospace;font-size:13px">${b.docNumber}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px">${b.txnDate ? new Date(b.txnDate).toLocaleDateString('en-US') : '—'}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px">${b.dueDate ? new Date(b.dueDate).toLocaleDateString('en-US') : '—'}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;text-align:right">$${b.balance.toFixed(2)}</td>
+    </tr>`).join('');
+}
+
+// POST send a payment instruction email for one or more selected bills, possibly
+// spanning multiple vendors.
+//   selections: [{ vendor_name, doc_numbers: ['1234', '1235', ...] }]
+//   amount_type: 'full' (pay each selected bill's full balance) or 'specific'
+//     (pay req.body.amount instead — only allowed when exactly one vendor is selected)
+app.post('/api/ap/payment-instruction-batch', async (req, res) => {
+  const { selections, amount_type, amount } = req.body;
+  if (!Array.isArray(selections) || !selections.length) return res.status(400).json({ error: 'selections required' });
   if (!['full', 'specific'].includes(amount_type)) return res.status(400).json({ error: 'amount_type must be full or specific' });
+  if (amount_type === 'specific' && selections.length !== 1) {
+    return res.status(400).json({ error: 'Specify Amount is only available when bills from a single vendor are selected' });
+  }
   if (amount_type === 'specific' && (amount === undefined || amount === null || amount === '' || isNaN(parseFloat(amount)))) {
     return res.status(400).json({ error: 'amount required for specific amount_type' });
   }
 
   try {
     const { billsByVendor } = await getApData();
-    const bills = billsByVendor[vendor_name.toUpperCase()] || [];
-    const totalBalance = bills.reduce((sum, b) => sum + b.balance, 0);
-    const amountToPay = amount_type === 'full' ? totalBalance : parseFloat(amount);
 
-    const billRows = bills.map(b => `
-      <tr>
-        <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-family:monospace;font-size:13px">${b.docNumber}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px">${b.txnDate ? new Date(b.txnDate).toLocaleDateString('en-US') : '—'}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;text-align:right">$${b.balance.toFixed(2)}</td>
-      </tr>`).join('');
+    const vendorSections = [];
+    let grandTotal = 0;
+    for (const sel of selections) {
+      const allBills = billsByVendor[sel.vendor_name.toUpperCase()] || [];
+      const docNumbers = (sel.doc_numbers || []).map(String);
+      const bills = allBills.filter(b => docNumbers.includes(String(b.docNumber)));
+      if (!bills.length) continue;
+      const subtotal = bills.reduce((sum, b) => sum + b.balance, 0);
+      grandTotal += subtotal;
+      vendorSections.push({ vendor_name: sel.vendor_name, bills, subtotal });
+    }
+
+    if (!vendorSections.length) return res.status(400).json({ error: 'None of the selected bills were found (they may have been paid already — refresh and try again)' });
+
+    const amountToPay = amount_type === 'full' ? grandTotal : parseFloat(amount);
+    const isSingleVendor = vendorSections.length === 1;
+
+    const totalBillCount = vendorSections.reduce((n, v) => n + v.bills.length, 0);
+    const sectionsHtml = vendorSections.map(v => `
+      <p style="margin:18px 0 8px;color:#1a202c;font-size:16px;font-weight:700">${v.vendor_name}</p>
+      <table style="width:100%;border-collapse:collapse;background:white;border:1px solid #e2e8f0;border-radius:4px">
+        <thead>
+          <tr style="background:#edf2f7">
+            <th style="padding:8px 12px;text-align:left;font-size:11px;color:#718096;text-transform:uppercase">Bill #</th>
+            <th style="padding:8px 12px;text-align:left;font-size:11px;color:#718096;text-transform:uppercase">Created</th>
+            <th style="padding:8px 12px;text-align:left;font-size:11px;color:#718096;text-transform:uppercase">Due</th>
+            <th style="padding:8px 12px;text-align:right;font-size:11px;color:#718096;text-transform:uppercase">Amount</th>
+          </tr>
+        </thead>
+        <tbody>${buildBillTableHtml(v.bills)}</tbody>
+      </table>
+      <div style="display:flex;justify-content:space-between;padding:6px 4px 0;color:#4a5568;font-size:13px">
+        <span>Subtotal:</span>
+        <span style="font-family:monospace">$${v.subtotal.toFixed(2)}</span>
+      </div>`).join('');
 
     const html = `
-      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+      <div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto">
         <div style="background:#2d3748;padding:20px 24px;border-radius:8px 8px 0 0">
           <h2 style="color:white;margin:0;font-size:18px">💸 Payment Instruction</h2>
-          <p style="color:#cbd5e0;margin:4px 0 0;font-size:13px">ProClean Accounting</p>
+          <p style="color:#cbd5e0;margin:4px 0 0;font-size:13px">ProClean Accounting${isSingleVendor ? '' : ` · ${vendorSections.length} vendors`}</p>
         </div>
         <div style="background:#f7fafc;padding:24px;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px">
-          <p style="margin:0 0 16px;color:#4a5568;font-size:14px">Please process a payment to the following vendor:</p>
-          <p style="margin:0 0 16px;color:#1a202c;font-size:18px;font-weight:700">${vendor_name}</p>
-          <table style="width:100%;border-collapse:collapse;background:white;border:1px solid #e2e8f0;border-radius:4px;margin-bottom:16px">
-            <thead>
-              <tr style="background:#edf2f7">
-                <th style="padding:8px 12px;text-align:left;font-size:11px;color:#718096;text-transform:uppercase">Bill #</th>
-                <th style="padding:8px 12px;text-align:left;font-size:11px;color:#718096;text-transform:uppercase">Date</th>
-                <th style="padding:8px 12px;text-align:right;font-size:11px;color:#718096;text-transform:uppercase">Amount</th>
-              </tr>
-            </thead>
-            <tbody>${billRows}</tbody>
-          </table>
-          <div style="display:flex;justify-content:space-between;padding:8px 0;color:#4a5568;font-size:14px">
-            <span>Total Outstanding Balance:</span>
-            <span style="font-family:monospace">$${totalBalance.toFixed(2)}</span>
-          </div>
+          <p style="margin:0 0 8px;color:#4a5568;font-size:14px">Please process payment for the following selected bill${totalBillCount === 1 ? '' : 's'}:</p>
+          ${sectionsHtml}
+          ${!isSingleVendor ? `
+          <div style="display:flex;justify-content:space-between;padding:8px 0;margin-top:8px;color:#4a5568;font-size:14px;border-top:1px solid #e2e8f0">
+            <span>Total Selected (all vendors):</span>
+            <span style="font-family:monospace">$${grandTotal.toFixed(2)}</span>
+          </div>` : ''}
           <div style="display:flex;justify-content:space-between;padding:12px 0;margin-top:8px;border-top:2px solid #2d3748;color:#1a202c;font-size:16px;font-weight:700">
-            <span>Amount to Pay${amount_type === 'specific' ? ' (Partial)' : ' (Full Balance)'}:</span>
+            <span>Amount to Pay${amount_type === 'specific' ? ' (Partial)' : ''}:</span>
             <span style="font-family:monospace">$${amountToPay.toFixed(2)}</span>
           </div>
+          <p style="margin:16px 0 0;color:#a0aec0;font-size:12px">Sent via ProClean Accounting · ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} ET</p>
+        </div>
+      </div>`;
+
+    const subject = isSingleVendor
+      ? `Payment Instruction — ${vendorSections[0].vendor_name} ($${amountToPay.toFixed(2)})`
+      : `Payment Instruction — ${vendorSections.length} vendors ($${amountToPay.toFixed(2)})`;
+
+    const ok = await sendResendEmail({ to: ACCOUNTING_EMAIL_TO, cc: ACCOUNTING_EMAIL_CC, subject, html });
+
+    if (ok) res.json({ ok: true });
+    else res.status(500).json({ error: 'Failed to send email' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Weekly overdue-receivables reminder ────────────────────────────────────────
+// ── Manual overdue receivables reminder ─────────────────────────────────────────
+// Sends an email listing selected open invoices, grouped by company and customer.
+// Any invoice older than the customer's configured Terms is highlighted in red.
+// This replaces the old automatic Wednesday email — accounting picks which
+// customers/invoices to include and sends on demand.
+//   selections: [{ company_key, customer_name, doc_numbers: ['1234', ...] }]
+app.post('/api/ar/send-reminder', async (req, res) => {
+  const { selections } = req.body;
+  if (!Array.isArray(selections) || !selections.length) return res.status(400).json({ error: 'selections required' });
+
+  try {
+    // Fetch AR data once per company referenced in the selections
+    const companyDataCache = {};
+    for (const sel of selections) {
+      if (!companyDataCache[sel.company_key]) {
+        companyDataCache[sel.company_key] = await getArData(sel.company_key);
+      }
+    }
+
+    const companySections = {}; // companyName -> array of customer html blocks
+    for (const sel of selections) {
+      const companyData = companyDataCache[sel.company_key];
+      if (companyData.error) continue;
+      const row = companyData.rows.find(r => r.name.toUpperCase() === sel.customer_name.toUpperCase());
+      if (!row) continue;
+
+      const docNumbers = (sel.doc_numbers || []).map(String);
+      const invoices = (row.invoices || []).filter(inv => docNumbers.includes(String(inv.docNumber)));
+      if (!invoices.length) continue;
+
+      const termsDays = row.terms_days;
+      const MS_PER_DAY = 86400000;
+      const now = Date.now();
+
+      const invRows = invoices.map(inv => {
+        const isOverdue = termsDays != null && inv.txnDate && ((now - new Date(inv.txnDate).getTime()) / MS_PER_DAY) > termsDays;
+        const created = inv.txnDate ? new Date(inv.txnDate).toLocaleDateString('en-US') : '—';
+        const due = inv.dueDate ? new Date(inv.dueDate).toLocaleDateString('en-US') : '—';
+        const style = isOverdue ? 'color:#c53030;font-weight:700' : '';
+        return `<tr>
+          <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;${style}">${inv.docNumber}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;${style}">${created}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;${style}">${due}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;text-align:right;font-family:monospace;${style}">$${inv.balance.toFixed(2)}</td>
+        </tr>`;
+      }).join('');
+
+      const termsLabel = termsDays != null ? `${termsDays}-day terms` : 'no Terms set';
+      const block = `
+        <p style="margin:16px 0 6px;color:#1a202c;font-size:15px;font-weight:700">${row.name} <span style="color:#a0aec0;font-weight:400;font-size:12px">(${termsLabel})</span></p>
+        <table style="width:100%;border-collapse:collapse;background:white;border:1px solid #e2e8f0;border-radius:4px">
+          <thead>
+            <tr style="background:#edf2f7">
+              <th style="padding:8px 12px;text-align:left;font-size:11px;color:#718096;text-transform:uppercase">Invoice #</th>
+              <th style="padding:8px 12px;text-align:left;font-size:11px;color:#718096;text-transform:uppercase">Created</th>
+              <th style="padding:8px 12px;text-align:left;font-size:11px;color:#718096;text-transform:uppercase">Due</th>
+              <th style="padding:8px 12px;text-align:right;font-size:11px;color:#718096;text-transform:uppercase">Balance</th>
+            </tr>
+          </thead>
+          <tbody>${invRows}</tbody>
+        </table>`;
+
+      if (!companySections[companyData.companyName]) companySections[companyData.companyName] = [];
+      companySections[companyData.companyName].push(block);
+    }
+
+    const companyNames = Object.keys(companySections);
+    if (!companyNames.length) return res.status(400).json({ error: 'None of the selected invoices were found (they may have been paid already — refresh and try again)' });
+
+    const sectionsHtml = companyNames.map(name => `
+      <h3 style="margin:20px 0 4px;color:#1a202c;font-size:15px">${name}</h3>
+      ${companySections[name].join('')}`).join('');
+
+    const html = `
+      <div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto">
+        <div style="background:#c53030;padding:20px 24px;border-radius:8px 8px 0 0">
+          <h2 style="color:white;margin:0;font-size:18px">⚠️ Overdue Receivables</h2>
+          <p style="color:#fed7d7;margin:4px 0 0;font-size:13px">ProClean Accounting · ${new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
+        </div>
+        <div style="background:#f7fafc;padding:24px;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px">
+          <p style="margin:0 0 8px;color:#4a5568;font-size:14px">Invoices highlighted in red have passed the customer's configured payment terms:</p>
+          ${sectionsHtml}
           <p style="margin:16px 0 0;color:#a0aec0;font-size:12px">Sent via ProClean Accounting · ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} ET</p>
         </div>
       </div>`;
@@ -2305,7 +2439,7 @@ app.post('/api/ap/payment-instruction', async (req, res) => {
     const ok = await sendResendEmail({
       to: ACCOUNTING_EMAIL_TO,
       cc: ACCOUNTING_EMAIL_CC,
-      subject: `Payment Instruction — ${vendor_name} ($${amountToPay.toFixed(2)})`,
+      subject: 'Overdue Receivables Reminder',
       html,
     });
 
@@ -2314,96 +2448,205 @@ app.post('/api/ap/payment-instruction', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Weekly overdue-receivables reminder ────────────────────────────────────────
-// Every Wednesday at 9am America/New_York, emails accounts@procleanofatl.com a
-// list of customers (across all 3 companies) whose open invoices have passed
-// their configured Terms. Customers with no Terms set are excluded — those are
-// only flagged visually on the site, not emailed.
-async function sendOverdueReminderEmail() {
+
+// ── Commission Calculator (Linen Pros / Brown Eyed Girl) ───────────────────────
+// Formula: net profit = sale price (invoice subtotal) - cost price (bills from
+// ProClean) - shipping cost - credit card cost. Commission = 50% of net profit.
+//
+// Sale price and cost price come directly from each company's own QBO
+// transactions (Invoices = sales, Bills/POs = cost of goods from ProClean), NOT
+// from proclean_items — so this works correctly even for items that aren't
+// tracked in ProClean's inventory database.
+//
+// Shipping/CC costs aren't available programmatically yet, so they're entered
+// manually per trailing window (last 30/60/90 days) and stored in
+// commission_adjustments.
+const COMMISSION_COMPANY_KEYS = ['company2', 'company3'];
+const COMMISSION_PERIODS = ['last30', 'last60', 'last90'];
+
+app.get('/api/commission/:companyKey', async (req, res) => {
+  const { companyKey } = req.params;
+  if (!COMMISSION_COMPANY_KEYS.includes(companyKey)) return res.status(400).json({ error: 'Invalid company' });
+
+  const company = appData.companies[companyKey];
+  if (!company?.tokens) return res.status(400).json({ error: 'Company not connected to QBO — reconnect on the main dashboard.' });
+
   try {
-    const sections = [];
-    for (const companyKey of AR_COMPANY_KEYS) {
-      const { companyName, rows } = await getArData(companyKey);
-      const overdue = rows.filter(r => r.status === 'overdue');
-      if (!overdue.length) continue;
-      const rowsHtml = overdue.map(r => `
-        <tr>
-          <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px">${r.name}</td>
-          <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;text-align:center">${r.terms_days}</td>
-          <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;text-align:center">${r.oldest_invoice_days != null ? r.oldest_invoice_days : '—'}</td>
-          <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;text-align:right;font-family:monospace">$${r.total.toFixed(2)}</td>
-        </tr>`).join('');
-      sections.push(`
-        <h3 style="margin:20px 0 8px;color:#1a202c;font-size:15px">${companyName}</h3>
-        <table style="width:100%;border-collapse:collapse;background:white;border:1px solid #e2e8f0;border-radius:4px;margin-bottom:8px">
-          <thead>
-            <tr style="background:#edf2f7">
-              <th style="padding:8px 12px;text-align:left;font-size:11px;color:#718096;text-transform:uppercase">Customer</th>
-              <th style="padding:8px 12px;text-align:center;font-size:11px;color:#718096;text-transform:uppercase">Terms (days)</th>
-              <th style="padding:8px 12px;text-align:center;font-size:11px;color:#718096;text-transform:uppercase">Oldest Invoice (days)</th>
-              <th style="padding:8px 12px;text-align:right;font-size:11px;color:#718096;text-transform:uppercase">Balance</th>
-            </tr>
-          </thead>
-          <tbody>${rowsHtml}</tbody>
-        </table>`);
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0];
+
+    const [invoiceData, billData, adjRes] = await Promise.all([
+      qboGet(companyKey, `query?query=${encodeURIComponent(`SELECT * FROM Invoice WHERE TxnDate >= '${ninetyDaysAgo}' MAXRESULTS 1000`)}`),
+      qboGet(companyKey, `query?query=${encodeURIComponent(`SELECT * FROM Bill WHERE TxnDate >= '${ninetyDaysAgo}' MAXRESULTS 1000`)}`),
+      pool.query('SELECT period_label, shipping_cost, cc_cost FROM commission_adjustments WHERE company_key=$1', [companyKey]),
+    ]);
+
+    if (invoiceData.Fault) return res.status(500).json({ error: 'QBO error (Invoice): ' + JSON.stringify(invoiceData.Fault) });
+    if (billData.Fault) return res.status(500).json({ error: 'QBO error (Bill): ' + JSON.stringify(billData.Fault) });
+
+    const now = Date.now();
+    const MS_PER_DAY = 86400000;
+
+    // Itemized invoices (sales)
+    const invoices = (invoiceData.QueryResponse?.Invoice || []).map(inv => {
+      const tax = parseFloat(inv.TxnTaxDetail?.TotalTax) || 0;
+      const subtotal = (parseFloat(inv.TotalAmt) || 0) - tax;
+      return {
+        docNumber: inv.DocNumber || inv.Id,
+        txnDate: inv.TxnDate,
+        customerName: inv.CustomerRef?.name || '',
+        subtotal,
+        ageDays: (now - new Date(inv.TxnDate).getTime()) / MS_PER_DAY,
+      };
+    }).sort((a, b) => new Date(b.txnDate) - new Date(a.txnDate));
+
+    // Itemized bills/POs (cost from ProClean)
+    const bills = (billData.QueryResponse?.Bill || []).map(bill => ({
+      docNumber: bill.DocNumber || bill.Id,
+      txnDate: bill.TxnDate,
+      vendorName: bill.VendorRef?.name || '',
+      amount: parseFloat(bill.TotalAmt) || 0,
+      ageDays: (now - new Date(bill.TxnDate).getTime()) / MS_PER_DAY,
+    })).sort((a, b) => new Date(b.txnDate) - new Date(a.txnDate));
+
+    const adjMap = {};
+    for (const row of adjRes.rows) adjMap[row.period_label] = row;
+
+    const periodDays = { last30: 30, last60: 60, last90: 90 };
+    const buckets = {};
+    for (const period of COMMISSION_PERIODS) {
+      const maxAge = periodDays[period];
+      const totalSales = invoices.filter(i => i.ageDays <= maxAge).reduce((s, i) => s + i.subtotal, 0);
+      const totalCost = bills.filter(b => b.ageDays <= maxAge).reduce((s, b) => s + b.amount, 0);
+      const adj = adjMap[period] || { shipping_cost: 0, cc_cost: 0 };
+      const shippingCost = parseFloat(adj.shipping_cost) || 0;
+      const ccCost = parseFloat(adj.cc_cost) || 0;
+      const grossProfit = totalSales - totalCost;
+      const netProfit = grossProfit - shippingCost - ccCost;
+      const commission = netProfit * 0.5;
+      buckets[period] = {
+        totalSales, totalCost, grossProfit, shippingCost, ccCost, netProfit, commission,
+        invoiceCount: invoices.filter(i => i.ageDays <= maxAge).length,
+        billCount: bills.filter(b => b.ageDays <= maxAge).length,
+      };
     }
 
-    if (!sections.length) {
-      console.log('[AR Reminder] No customers past terms — skipping email');
-      return;
+    res.json({ companyName: company.name, invoices, bills, buckets });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PATCH manual shipping/CC cost adjustments for a commission trailing window
+app.patch('/api/commission/:companyKey/adjustments', async (req, res) => {
+  const { companyKey } = req.params;
+  const { period, shipping_cost, cc_cost } = req.body;
+  if (!COMMISSION_COMPANY_KEYS.includes(companyKey)) return res.status(400).json({ error: 'Invalid company' });
+  if (!COMMISSION_PERIODS.includes(period)) return res.status(400).json({ error: 'period must be one of last30, last60, last90' });
+  try {
+    await pool.query(`
+      INSERT INTO commission_adjustments (company_key, period_label, shipping_cost, cc_cost, last_updated)
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (company_key, period_label) DO UPDATE SET shipping_cost=$3, cc_cost=$4, last_updated=NOW()
+    `, [companyKey, period, parseFloat(shipping_cost) || 0, parseFloat(cc_cost) || 0]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── ProClean Profit ──────────────────────────────────────────────────────────
+// For each open invoice line item, splits revenue into:
+//   - Inventory items (item_type = 'Inventory' in proclean_items): sales - COGS (qty x purchase_cost)
+//   - Non-inventory / service items (or anything not found in proclean_items): revenue only, no cost
+// Bucketed into Today / Last 30 / 60 / 90 days (trailing windows from today).
+// Also returns an itemized per-invoice breakdown for the Excel export.
+app.get('/api/profit/company1', async (req, res) => {
+  const company = appData.companies['company1'];
+  if (!company?.tokens) return res.status(400).json({ error: 'ProClean not connected to QBO — reconnect on the main dashboard.' });
+
+  try {
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0];
+
+    const [invoiceData, itemRes] = await Promise.all([
+      qboGet('company1', `query?query=${encodeURIComponent(`SELECT * FROM Invoice WHERE TxnDate >= '${ninetyDaysAgo}' MAXRESULTS 1000`)}`),
+      pool.query("SELECT name, sku, purchase_cost, item_type FROM proclean_items"),
+    ]);
+
+    if (invoiceData.Fault) return res.status(500).json({ error: 'QBO error: ' + JSON.stringify(invoiceData.Fault) });
+
+    // Item lookup by name and SKU (uppercased) -> { cost, isInventory }
+    const itemMap = {};
+    for (const item of itemRes.rows) {
+      const entry = { cost: parseFloat(item.purchase_cost) || 0, isInventory: item.item_type === 'Inventory' };
+      itemMap[item.name.toUpperCase()] = entry;
+      if (item.sku) itemMap[item.sku.toUpperCase()] = entry;
     }
 
-    const html = `
-      <div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto">
-        <div style="background:#c53030;padding:20px 24px;border-radius:8px 8px 0 0">
-          <h2 style="color:white;margin:0;font-size:18px">⚠️ Weekly Overdue Receivables</h2>
-          <p style="color:#fed7d7;margin:4px 0 0;font-size:13px">ProClean Accounting · ${new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
-        </div>
-        <div style="background:#f7fafc;padding:24px;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px">
-          <p style="margin:0 0 8px;color:#4a5568;font-size:14px">The following customers have open invoices that have passed their configured payment terms:</p>
-          ${sections.join('')}
-          <p style="margin:16px 0 0;color:#a0aec0;font-size:12px">Sent via ProClean Accounting · ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} ET</p>
-        </div>
-      </div>`;
+    const invoiceList = invoiceData.QueryResponse?.Invoice || [];
 
-    const ok = await sendResendEmail({
-      to: ACCOUNTING_EMAIL_TO,
-      cc: ACCOUNTING_EMAIL_CC,
-      subject: '⚠️ Weekly Overdue Receivables Report',
-      html,
-    });
-    console.log(ok ? '[AR Reminder] Sent' : '[AR Reminder] Failed to send');
-  } catch (err) {
-    console.error('[AR Reminder] Error:', err.message);
-  }
-}
-
-// Checks every 15 minutes; fires once when it's Wednesday 9am America/New_York
-// and hasn't already fired for that date (tracked in app_state).
-function startArReminderScheduler() {
-  setInterval(async () => {
-    try {
-      const now = new Date();
-      const parts = new Intl.DateTimeFormat('en-US', {
-        timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit'
-      }).formatToParts(now);
-      const get = type => parts.find(p => p.type === type)?.value;
-      const weekday = get('weekday'); // e.g. "Wed"
-      const hour = parseInt(get('hour'), 10);
-      const dateStr = `${get('year')}-${get('month')}-${get('day')}`;
-
-      if (weekday !== 'Wed' || hour !== 9) return;
-
-      const lastSent = await getField('arReminderLastSent', null);
-      if (lastSent === dateStr) return;
-
-      await sendOverdueReminderEmail();
-      await saveField('arReminderLastSent', dateStr);
-    } catch (err) {
-      console.error('[AR Reminder Scheduler] Error:', err.message);
+    const todayStr = new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York' });
+    const buckets = {
+      today: { sinceDays: 0 },
+      last30: { sinceDays: 30 },
+      last60: { sinceDays: 60 },
+      last90: { sinceDays: 90 },
+    };
+    for (const key of Object.keys(buckets)) {
+      buckets[key].invSales = 0;
+      buckets[key].invCost = 0;
+      buckets[key].otherRevenue = 0;
     }
-  }, 15 * 60 * 1000);
-}
+
+    const now = Date.now();
+    const MS_PER_DAY = 86400000;
+    const invoiceBreakdown = [];
+
+    for (const inv of invoiceList) {
+      let invSales = 0, invCost = 0, otherRevenue = 0;
+
+      for (const line of (inv.Line || [])) {
+        const detail = line.SalesItemLineDetail;
+        if (!detail) continue;
+        const itemName = detail.ItemRef?.name;
+        const lineAmount = parseFloat(line.Amount) || 0;
+        const qty = parseFloat(detail.Qty) || 0;
+        const lookup = itemName ? itemMap[itemName.toUpperCase()] : null;
+
+        if (lookup && lookup.isInventory) {
+          invSales += lineAmount;
+          invCost += qty * lookup.cost;
+        } else {
+          otherRevenue += lineAmount;
+        }
+      }
+
+      const invDate = new Date(inv.TxnDate);
+      const ageDays = (now - invDate.getTime()) / MS_PER_DAY;
+      const invDateStr = invDate.toLocaleDateString('en-US', { timeZone: 'America/New_York' });
+
+      invoiceBreakdown.push({
+        docNumber: inv.DocNumber || inv.Id,
+        txnDate: inv.TxnDate,
+        customerName: inv.CustomerRef?.name || '',
+        invSales, invCost, invProfit: invSales - invCost, otherRevenue,
+        total: invSales + otherRevenue,
+      });
+
+      if (invDateStr === todayStr) {
+        buckets.today.invSales += invSales;
+        buckets.today.invCost += invCost;
+        buckets.today.otherRevenue += otherRevenue;
+      }
+      if (ageDays <= 30) { buckets.last30.invSales += invSales; buckets.last30.invCost += invCost; buckets.last30.otherRevenue += otherRevenue; }
+      if (ageDays <= 60) { buckets.last60.invSales += invSales; buckets.last60.invCost += invCost; buckets.last60.otherRevenue += otherRevenue; }
+      if (ageDays <= 90) { buckets.last90.invSales += invSales; buckets.last90.invCost += invCost; buckets.last90.otherRevenue += otherRevenue; }
+    }
+
+    for (const key of Object.keys(buckets)) {
+      buckets[key].invProfit = buckets[key].invSales - buckets[key].invCost;
+    }
+
+    invoiceBreakdown.sort((a, b) => new Date(b.txnDate) - new Date(a.txnDate));
+
+    res.json({ companyName: company.name, invoiceCount: invoiceList.length, buckets, invoices: invoiceBreakdown });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 // Serve Accounting UI (AR/AP — accounting role + admin)
 app.get('/accounting', (req, res) => {
@@ -2420,7 +2663,6 @@ initDb()
     appData = data;
     startProCleanPoller();
     seedPkInventory();
-    startArReminderScheduler();
     app.listen(CONFIG.port, () => {
       console.log(`\n🚀 QBO Inventory Sync running on port ${CONFIG.port}`);
       console.log(`   Dashboard: http://localhost:${CONFIG.port}`);
