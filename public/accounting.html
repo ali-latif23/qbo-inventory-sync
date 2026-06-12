@@ -205,6 +205,34 @@
     .pi-amount-input:focus { border-color: var(--blue); }
     .pi-success { text-align: center; padding: 12px 0; color: var(--green); font-size: 13px; font-weight: 600; }
 
+    /* ── Bill selection ── */
+    .bill-check { cursor: pointer; accent-color: var(--blue); width: 14px; height: 14px; vertical-align: -2px; margin-right: 6px; }
+    .selection-bar {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+      display: none; align-items: center; gap: 12px;
+      background: #1a202c; color: white;
+      padding: 12px 20px; border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+      font-size: 13px; font-weight: 500; z-index: 100;
+      white-space: nowrap;
+    }
+    .selection-bar.visible { display: flex; }
+    #invoice-selection-bar { bottom: 84px; }
+    .sel-count { color: #a0aec0; }
+    .sel-count strong { color: white; }
+    .sel-divider { width: 1px; height: 20px; background: #4a5568; }
+    .btn-sel-send {
+      background: var(--blue); border: none; color: white;
+      padding: 7px 14px; border-radius: 8px; font-size: 13px;
+      font-weight: 600; cursor: pointer; transition: opacity 0.15s;
+    }
+    .btn-sel-send:hover { opacity: 0.85; }
+    .btn-sel-cancel { background: none; border: none; color: #a0aec0; font-size: 13px; cursor: pointer; padding: 4px 8px; }
+    .btn-sel-cancel:hover { color: white; }
+    .pi-vendor-section { margin-bottom: 14px; }
+    .pi-vendor-name { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
+    .pi-subtotal { display: flex; justify-content: space-between; font-size: 12px; color: var(--text2); padding: 4px 0; }
+
     @media (max-width: 900px) {
       .stat-grid { grid-template-columns: repeat(2, 1fr); }
       .sidebar { width: 64px; min-width: 64px; }
@@ -235,6 +263,14 @@
       <button class="nav-item" onclick="showPage('payables')">
         <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2z"/></svg>
         <span>Payables</span>
+      </button>
+      <button class="nav-item" onclick="showPage('commission')">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0zM12 7v10M9 9.5h4.5a1.5 1.5 0 010 3H10a1.5 1.5 0 000 3h4.5"/></svg>
+        <span>Commission</span>
+      </button>
+      <button class="nav-item" onclick="showPage('profit')">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3 17l6-6 4 4 8-8M14 7h7v7"/></svg>
+        <span>Profit</span>
       </button>
     </nav>
     <div class="sidebar-footer">
@@ -306,6 +342,7 @@
         <button class="filter-tab" onclick="setArCompany('company2', this)">Linen Pros</button>
         <button class="filter-tab" onclick="setArCompany('company3', this)">Brown Eyed Girl</button>
       </div>
+      <p style="font-size:12px;color:var(--text3);margin-bottom:12px">Click a customer to expand their open invoices, then check individual invoices to include in a reminder email — across one or multiple customers/companies. Invoices past the customer's Terms are highlighted red.</p>
       <div class="ar-table-wrap">
         <table class="ar-table">
           <thead>
@@ -334,6 +371,7 @@
           <p class="page-sub" id="ap-sub">Aged Payables — ProClean</p>
         </div>
       </div>
+      <p style="font-size:12px;color:var(--text3);margin-bottom:12px">Click a vendor to expand their open bills, then check individual bills to include in a payment instruction — across one or multiple vendors.</p>
       <div class="ar-table-wrap">
         <table class="ar-table">
           <thead>
@@ -353,6 +391,49 @@
       </div>
     </div>
 
+    <!-- COMMISSION CALCULATOR PAGE -->
+    <div class="page" id="page-commission">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Commission Calculator</h1>
+          <p class="page-sub">Sale price (invoices) &minus; cost price (bills from ProClean) &minus; shipping &minus; CC fees = net profit. Commission = 50% of net profit.</p>
+        </div>
+      </div>
+      <div class="filter-tabs" id="commission-company-tabs">
+        <button class="filter-tab active" onclick="setCommissionCompany('company2', this)">Linen Pros</button>
+        <button class="filter-tab" onclick="setCommissionCompany('company3', this)">Brown Eyed Girl</button>
+      </div>
+
+      <div id="commission-content"><div class="loading"><div class="spinner"></div> Loading…</div></div>
+    </div>
+
+    <!-- PROCLEAN PROFIT PAGE -->
+    <div class="page" id="page-profit">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">ProClean Profit</h1>
+          <p class="page-sub" id="profit-sub">Invoice subtotals minus cost of goods sold (proclean_items.purchase_cost)</p>
+        </div>
+      </div>
+      <div id="profit-content"><div class="loading"><div class="spinner"></div> Loading…</div></div>
+    </div>
+
+    <!-- Floating invoice selection bar -->
+    <div class="selection-bar" id="invoice-selection-bar">
+      <span class="sel-count"><strong id="inv-sel-count-num">0</strong> invoice<span id="inv-sel-count-plural">s</span> selected · <strong id="inv-sel-count-total">$0.00</strong></span>
+      <div class="sel-divider"></div>
+      <button class="btn-sel-send" onclick="openSendReminderModal()">Send Reminder Email</button>
+      <button class="btn-sel-cancel" onclick="clearInvoiceSelection()">✕ Clear</button>
+    </div>
+
+    <!-- Floating bill selection bar -->
+    <div class="selection-bar" id="bill-selection-bar">
+      <span class="sel-count"><strong id="sel-count-num">0</strong> bill<span id="sel-count-plural">s</span> selected · <strong id="sel-count-total">$0.00</strong></span>
+      <div class="sel-divider"></div>
+      <button class="btn-sel-send" onclick="openBatchPiModal()">Send Payment Instruction</button>
+      <button class="btn-sel-cancel" onclick="clearBillSelection()">✕ Clear</button>
+    </div>
+
   </main>
 </div>
 
@@ -364,6 +445,17 @@
       <button class="modal-close-btn" onclick="closePiModal()">✕</button>
     </div>
     <div class="modal-body" id="pi-modal-body"></div>
+  </div>
+</div>
+
+<!-- Send Reminder Modal -->
+<div class="modal-overlay" id="reminder-modal" onclick="if(event.target===this)closeReminderModal()">
+  <div class="modal-box">
+    <div class="modal-box-header">
+      <h3>Send Overdue Reminder</h3>
+      <button class="modal-close-btn" onclick="closeReminderModal()">✕</button>
+    </div>
+    <div class="modal-body" id="reminder-modal-body"></div>
   </div>
 </div>
 
@@ -391,15 +483,21 @@ function showPage(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-' + name).classList.add('active');
-  const navMap = { dashboard: 0, receivables: 1, payables: 2 };
+  const navMap = { dashboard: 0, receivables: 1, payables: 2, commission: 3, profit: 4 };
   document.querySelectorAll('.nav-item')[navMap[name]].classList.add('active');
   if (name === 'dashboard') loadDashboard();
   if (name === 'receivables') loadAr(currentArCompany);
   if (name === 'payables') loadAp();
+  if (name === 'commission') loadCommission(currentCommissionCompany);
+  if (name === 'profit') loadProfit();
 }
 
 const COMPANY_LABELS = { company1: 'ProClean', company2: 'Linen Pros', company3: 'Brown Eyed Girl' };
 let currentArCompany = 'company1';
+// selectedBills: vendorName -> Map(docNumber -> { balance, txnDate, dueDate })
+let selectedBills = {};
+// selectedInvoices: "companyKey::customerName" -> Map(docNumber -> { balance, txnDate, dueDate, overdue, companyKey, customerName })
+let selectedInvoices = {};
 let arDataCache = {}; // companyKey -> { rows, ... }
 let apDataCache = null;
 
@@ -449,8 +547,9 @@ function renderAr(data, companyKey) {
       const created = inv.txnDate ? new Date(inv.txnDate).toLocaleDateString('en-US') : '—';
       const due = inv.dueDate ? new Date(inv.dueDate).toLocaleDateString('en-US') : '—';
       const isOverdue = termsDays != null && inv.txnDate && ((Date.now() - new Date(inv.txnDate).getTime()) / 86400000) > termsDays;
+      const checked = isInvoiceSelected(companyKey, r.name, inv.docNumber) ? 'checked' : '';
       return `<tr class="${isOverdue ? 'invoice-overdue' : ''}">
-        <td>${inv.docNumber}</td>
+        <td><input type="checkbox" class="bill-check" data-company="${companyKey}" data-customer="${escapeAttr(r.name)}" data-doc="${inv.docNumber}" data-balance="${inv.balance}" data-txn="${inv.txnDate || ''}" data-due="${inv.dueDate || ''}" data-overdue="${isOverdue ? '1' : '0'}" data-row="${rowId}" ${checked} onchange="toggleInvoiceSelect(this)">${inv.docNumber}</td>
         <td>${created}</td>
         <td>${due}</td>
         <td>${fmtMoney(inv.balance)}</td>
@@ -458,8 +557,11 @@ function renderAr(data, companyKey) {
     }).join('');
 
     const detailHtml = (r.invoices && r.invoices.length)
-      ? `<table class="detail-table"><thead><tr><th>Invoice #</th><th>Created</th><th>Due</th><th>Balance</th></tr></thead><tbody>${invoiceRows}</tbody></table>`
+      ? `<table class="detail-table"><thead><tr><th><input type="checkbox" class="bill-check" id="selall-${rowId}" data-row="${rowId}" onchange="toggleCustomerSelectAll(this)">Invoice #</th><th>Created</th><th>Due</th><th>Balance</th></tr></thead><tbody>${invoiceRows}</tbody></table>`
       : `<div style="font-size:12px;color:var(--text3);padding:4px 10px">No open invoices</div>`;
+
+    const selCount = (selectedInvoices[companyKey + '::' + r.name] && selectedInvoices[companyKey + '::' + r.name].size) || 0;
+    const selBadge = selCount ? ` <span class="status-badge status-ok">${selCount} selected</span>` : '';
 
     return `<tr class="${rowClass} expandable" onclick="toggleArDetail('${rowId}')">
       <td><span class="expand-arrow" id="arrow-${rowId}">&#9656;</span>${r.name}</td>
@@ -473,12 +575,13 @@ function renderAr(data, companyKey) {
         <input class="terms-input" type="number" min="0" step="1" placeholder="Set" value="${termsVal}"
                oninput="debounceTerms('${companyKey}','${safe}',()=>saveTerms('${companyKey}','${r.name.replace(/'/g, "\\'")}',this.value,this))" />
       </td>
-      <td style="text-align:center">${badge}</td>
+      <td style="text-align:center" id="selbadge-${rowId}" data-status="${r.status}">${badge}${selBadge}</td>
     </tr>
     <tr class="detail-row collapsed" id="detail-${rowId}">
       <td colspan="9"><div class="detail-inner">${detailHtml}</div></td>
     </tr>`;
   }).join('');
+  refreshInvoiceSelectionBar();
 }
 
 function toggleArDetail(rowId) {
@@ -529,19 +632,25 @@ async function loadAp() {
     }
     tbody.innerHTML = data.rows.map((r, i) => {
       const rowId = `ap-${i}`;
-      const billRows = (r.bills || []).slice().sort((a, b) => new Date(a.txnDate) - new Date(b.txnDate)).map(b => {
+      const vendorName = r.name;
+      const bills = (r.bills || []).slice().sort((a, b) => new Date(a.txnDate) - new Date(b.txnDate));
+      const billRows = bills.map(b => {
         const created = b.txnDate ? new Date(b.txnDate).toLocaleDateString('en-US') : '—';
         const due = b.dueDate ? new Date(b.dueDate).toLocaleDateString('en-US') : '—';
+        const checked = isBillSelected(vendorName, b.docNumber) ? 'checked' : '';
         return `<tr>
-          <td>${b.docNumber}</td>
+          <td><input type="checkbox" class="bill-check" data-vendor="${escapeAttr(vendorName)}" data-doc="${b.docNumber}" data-balance="${b.balance}" data-txn="${b.txnDate || ''}" data-due="${b.dueDate || ''}" data-row="${rowId}" ${checked} onchange="toggleBillSelect(this)">${b.docNumber}</td>
           <td>${created}</td>
           <td>${due}</td>
           <td>${fmtMoney(b.balance)}</td>
         </tr>`;
       }).join('');
-      const detailHtml = (r.bills && r.bills.length)
-        ? `<table class="detail-table"><thead><tr><th>Bill #</th><th>Created</th><th>Due</th><th>Balance</th></tr></thead><tbody>${billRows}</tbody></table>`
+      const detailHtml = bills.length
+        ? `<table class="detail-table"><thead><tr><th><input type="checkbox" class="bill-check" id="selall-${rowId}" data-row="${rowId}" onchange="toggleVendorSelectAll(this)">Bill #</th><th>Created</th><th>Due</th><th>Balance</th></tr></thead><tbody>${billRows}</tbody></table>`
         : `<div style="font-size:12px;color:var(--text3);padding:4px 10px">No open bills</div>`;
+
+      const selCount = (selectedBills[vendorName] && selectedBills[vendorName].size) || 0;
+      const selBadge = selCount ? `<span class="status-badge status-ok">${selCount} selected</span>` : '';
 
       return `<tr class="expandable" onclick="toggleArDetail('${rowId}')">
         <td><span class="expand-arrow" id="arrow-${rowId}">&#9656;</span>${r.name}</td>
@@ -551,32 +660,265 @@ async function loadAp() {
         <td>${fmtMoney(r.d61_90)}</td>
         <td>${fmtMoney(r.d91_plus)}</td>
         <td style="font-weight:700">${fmtMoney(r.total)}</td>
-        <td style="text-align:center" onclick="event.stopPropagation()"><button class="btn-send" onclick="openPiModal('${r.name.replace(/'/g, "\\'")}', ${r.total})">Send Payment Instruction</button></td>
+        <td style="text-align:center" id="selbadge-${rowId}">${selBadge}</td>
       </tr>
       <tr class="detail-row collapsed" id="detail-${rowId}">
         <td colspan="8"><div class="detail-inner">${detailHtml}</div></td>
       </tr>`;
     }).join('');
+    refreshSelectionBar();
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state">Error: ${e.message}</div></td></tr>`;
   }
 }
 
-// ── Payment Instruction Modal ──────────────────────────────────────────────────
-function openPiModal(vendorName, total) {
+// ── Bill Selection ──────────────────────────────────────────────────────────
+function escapeAttr(s) {
+  return String(s).replace(/"/g, '&quot;');
+}
+
+function isBillSelected(vendorName, docNumber) {
+  return !!(selectedBills[vendorName] && selectedBills[vendorName].has(String(docNumber)));
+}
+
+function toggleBillSelect(cb) {
+  const vendor = cb.dataset.vendor;
+  const doc = cb.dataset.doc;
+  if (!selectedBills[vendor]) selectedBills[vendor] = new Map();
+  if (cb.checked) {
+    selectedBills[vendor].set(doc, { balance: parseFloat(cb.dataset.balance), txnDate: cb.dataset.txn, dueDate: cb.dataset.due });
+  } else {
+    selectedBills[vendor].delete(doc);
+    if (selectedBills[vendor].size === 0) delete selectedBills[vendor];
+  }
+  updateVendorSelectUi(vendor, cb.dataset.row);
+  refreshSelectionBar();
+}
+
+function toggleVendorSelectAll(masterCb) {
+  const rowId = masterCb.dataset.row;
+  document.querySelectorAll(`#detail-${rowId} .bill-check[data-doc]`).forEach(cb => {
+    if (cb.checked !== masterCb.checked) {
+      cb.checked = masterCb.checked;
+      toggleBillSelect(cb);
+    }
+  });
+}
+
+function updateVendorSelectUi(vendor, rowId) {
+  const count = (selectedBills[vendor] && selectedBills[vendor].size) || 0;
+  const badge = document.getElementById('selbadge-' + rowId);
+  if (badge) badge.innerHTML = count ? `<span class="status-badge status-ok">${count} selected</span>` : '';
+  const selAll = document.getElementById('selall-' + rowId);
+  if (selAll) {
+    const total = document.querySelectorAll(`#detail-${rowId} .bill-check[data-doc]`).length;
+    selAll.checked = count === total && total > 0;
+    selAll.indeterminate = count > 0 && count < total;
+  }
+}
+
+function refreshSelectionBar() {
+  let count = 0, total = 0;
+  for (const vendor in selectedBills) {
+    for (const bill of selectedBills[vendor].values()) {
+      count++;
+      total += bill.balance;
+    }
+  }
+  const bar = document.getElementById('bill-selection-bar');
+  document.getElementById('sel-count-num').textContent = count;
+  document.getElementById('sel-count-plural').textContent = count === 1 ? '' : 's';
+  document.getElementById('sel-count-total').textContent = fmtMoney(total);
+  bar.classList.toggle('visible', count > 0);
+}
+
+function clearBillSelection() {
+  selectedBills = {};
+  document.querySelectorAll('#ap-body .bill-check').forEach(cb => { cb.checked = false; cb.indeterminate = false; });
+  document.querySelectorAll('[id^="selbadge-ap-"]').forEach(el => el.innerHTML = '');
+  refreshSelectionBar();
+}
+
+// ── AR Invoice Selection ────────────────────────────────────────────────────
+function statusBadgeHtml(status) {
+  return status === 'overdue' ? '<span class="status-badge status-overdue">Over Terms</span>'
+    : status === 'no_terms' ? '<span class="status-badge status-no-terms">Terms Not Set</span>'
+    : '<span class="status-badge status-ok">OK</span>';
+}
+
+function isInvoiceSelected(companyKey, customerName, docNumber) {
+  const key = companyKey + '::' + customerName;
+  return !!(selectedInvoices[key] && selectedInvoices[key].has(String(docNumber)));
+}
+
+function toggleInvoiceSelect(cb) {
+  const key = cb.dataset.company + '::' + cb.dataset.customer;
+  const doc = cb.dataset.doc;
+  if (!selectedInvoices[key]) selectedInvoices[key] = new Map();
+  if (cb.checked) {
+    selectedInvoices[key].set(doc, {
+      balance: parseFloat(cb.dataset.balance), txnDate: cb.dataset.txn, dueDate: cb.dataset.due,
+      overdue: cb.dataset.overdue === '1', companyKey: cb.dataset.company, customerName: cb.dataset.customer,
+    });
+  } else {
+    selectedInvoices[key].delete(doc);
+    if (selectedInvoices[key].size === 0) delete selectedInvoices[key];
+  }
+  updateCustomerSelectUi(key, cb.dataset.row);
+  refreshInvoiceSelectionBar();
+}
+
+function toggleCustomerSelectAll(masterCb) {
+  const rowId = masterCb.dataset.row;
+  document.querySelectorAll(`#detail-${rowId} .bill-check[data-doc]`).forEach(cb => {
+    if (cb.checked !== masterCb.checked) {
+      cb.checked = masterCb.checked;
+      toggleInvoiceSelect(cb);
+    }
+  });
+}
+
+function updateCustomerSelectUi(key, rowId) {
+  const count = (selectedInvoices[key] && selectedInvoices[key].size) || 0;
+  const badgeCell = document.getElementById('selbadge-' + rowId);
+  if (badgeCell) {
+    const status = badgeCell.dataset.status;
+    badgeCell.innerHTML = statusBadgeHtml(status) + (count ? ` <span class="status-badge status-ok">${count} selected</span>` : '');
+  }
+  const selAll = document.getElementById('selall-' + rowId);
+  if (selAll) {
+    const total = document.querySelectorAll(`#detail-${rowId} .bill-check[data-doc]`).length;
+    selAll.checked = count === total && total > 0;
+    selAll.indeterminate = count > 0 && count < total;
+  }
+}
+
+function refreshInvoiceSelectionBar() {
+  let count = 0, total = 0;
+  for (const key in selectedInvoices) {
+    for (const inv of selectedInvoices[key].values()) {
+      count++;
+      total += inv.balance;
+    }
+  }
+  const bar = document.getElementById('invoice-selection-bar');
+  document.getElementById('inv-sel-count-num').textContent = count;
+  document.getElementById('inv-sel-count-plural').textContent = count === 1 ? '' : 's';
+  document.getElementById('inv-sel-count-total').textContent = fmtMoney(total);
+  bar.classList.toggle('visible', count > 0);
+}
+
+function clearInvoiceSelection() {
+  selectedInvoices = {};
+  document.querySelectorAll('#ar-body .bill-check').forEach(cb => { cb.checked = false; cb.indeterminate = false; });
+  document.querySelectorAll('[id^="selbadge-ar-"]').forEach(el => {
+    el.innerHTML = statusBadgeHtml(el.dataset.status);
+  });
+  refreshInvoiceSelectionBar();
+}
+
+// ── Send Reminder Modal ──────────────────────────────────────────────────────
+function openSendReminderModal() {
+  const keys = Object.keys(selectedInvoices);
+  if (!keys.length) return;
+
+  const sectionsByCompany = {};
+  for (const key of keys) {
+    const [companyKey, customerName] = key.split('::');
+    const companyLabel = COMPANY_LABELS[companyKey] || companyKey;
+    const invoices = selectedInvoices[key];
+    const rows = [...invoices.entries()].map(([doc, inv]) => {
+      const created = inv.txnDate ? new Date(inv.txnDate).toLocaleDateString('en-US') : '—';
+      const due = inv.dueDate ? new Date(inv.dueDate).toLocaleDateString('en-US') : '—';
+      const style = inv.overdue ? 'color:var(--red);font-weight:700' : '';
+      return `<tr style="${style}"><td>${doc}</td><td>${created}</td><td>${due}</td><td>${fmtMoney(inv.balance)}</td></tr>`;
+    }).join('');
+    const html = `<div class="pi-vendor-section">
+      <div class="pi-vendor-name">${customerName}</div>
+      <table class="detail-table"><thead><tr><th>Invoice #</th><th>Created</th><th>Due</th><th>Balance</th></tr></thead><tbody>${rows}</tbody></table>
+    </div>`;
+    if (!sectionsByCompany[companyLabel]) sectionsByCompany[companyLabel] = [];
+    sectionsByCompany[companyLabel].push(html);
+  }
+
+  const sectionsHtml = Object.keys(sectionsByCompany).map(label => `
+    <div style="font-size:13px;font-weight:700;color:var(--text2);margin:12px 0 4px">${label}</div>
+    ${sectionsByCompany[label].join('')}`).join('');
+
+  const body = document.getElementById('reminder-modal-body');
+  body.innerHTML = `
+    <p style="font-size:12px;color:var(--text3);margin-bottom:8px">Invoices in <span style="color:var(--red);font-weight:700">red</span> have passed the customer's Terms. This sends one email to accounts@procleanofatl.com.</p>
+    ${sectionsHtml}
+    <div class="pi-option-btns" style="margin-top:14px">
+      <button class="btn-primary" onclick="sendReminderEmail(this)">Send Reminder Email</button>
+    </div>
+  `;
+  document.getElementById('reminder-modal').classList.add('visible');
+}
+
+function closeReminderModal() {
+  document.getElementById('reminder-modal').classList.remove('visible');
+}
+
+async function sendReminderEmail(btn) {
+  const allButtons = document.querySelectorAll('#reminder-modal-body button');
+  allButtons.forEach(b => b.disabled = true);
+  const originalText = btn.textContent;
+  btn.textContent = 'Sending…';
+  try {
+    const selections = Object.keys(selectedInvoices).map(key => {
+      const [companyKey, customerName] = key.split('::');
+      return { company_key: companyKey, customer_name: customerName, doc_numbers: [...selectedInvoices[key].keys()] };
+    });
+    await apiFetch('/api/ar/send-reminder', {
+      method: 'POST',
+      body: JSON.stringify({ selections })
+    });
+    document.getElementById('reminder-modal-body').innerHTML = `<div class="pi-success">✓ Reminder email sent to accounts@procleanofatl.com</div>`;
+    clearInvoiceSelection();
+    setTimeout(closeReminderModal, 1800);
+  } catch (e) {
+    allButtons.forEach(b => b.disabled = false);
+    btn.textContent = originalText;
+    alert('Error sending email: ' + e.message);
+  }
+}
+
+// ── Payment Instruction Modal (batch, possibly multiple vendors) ──────────────
+function openBatchPiModal() {
+  const vendors = Object.keys(selectedBills);
+  if (!vendors.length) return;
+
+  let grandTotal = 0;
+  const sectionsHtml = vendors.map(vendor => {
+    const bills = selectedBills[vendor];
+    let subtotal = 0;
+    const rows = [...bills.entries()].map(([doc, b]) => {
+      subtotal += b.balance;
+      const created = b.txnDate ? new Date(b.txnDate).toLocaleDateString('en-US') : '—';
+      return `<tr><td>${doc}</td><td>${created}</td><td>${fmtMoney(b.balance)}</td></tr>`;
+    }).join('');
+    grandTotal += subtotal;
+    return `<div class="pi-vendor-section">
+      <div class="pi-vendor-name">${vendor}</div>
+      <table class="detail-table"><thead><tr><th>Bill #</th><th>Created</th><th>Balance</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="pi-subtotal"><span>Subtotal</span><span>${fmtMoney(subtotal)}</span></div>
+    </div>`;
+  }).join('');
+
+  const isSingleVendor = vendors.length === 1;
   const body = document.getElementById('pi-modal-body');
   body.innerHTML = `
-    <div style="font-size:13px;color:var(--text2);margin-bottom:4px">Vendor</div>
-    <div style="font-size:16px;font-weight:700;margin-bottom:14px">${vendorName}</div>
-    <div style="font-size:13px;color:var(--text2);margin-bottom:2px">Total Outstanding Balance</div>
-    <div class="pi-total">${fmtMoney(total)}</div>
+    ${sectionsHtml}
+    <div style="font-size:13px;color:var(--text2);margin:10px 0 2px;border-top:1px solid var(--border);padding-top:10px">Total Selected${isSingleVendor ? '' : ' (all vendors)'}</div>
+    <div class="pi-total">${fmtMoney(grandTotal)}</div>
     <div class="pi-option-btns">
-      <button class="btn-primary" onclick="sendPaymentInstruction('${vendorName.replace(/'/g, "\\'")}', 'full', null, this)">Send Full Amount (${fmtMoney(total)})</button>
-      <button class="btn-ghost" onclick="showAmountInput('${vendorName.replace(/'/g, "\\'")}')">Specify Amount</button>
+      <button class="btn-primary" onclick="sendBatchPaymentInstruction('full', null, this)">Send Full Amount (${fmtMoney(grandTotal)})</button>
+      ${isSingleVendor ? `<button class="btn-ghost" onclick="showBatchAmountInput()">Specify Amount</button>` : `<div style="font-size:11px;color:var(--text3);text-align:center">Specify Amount is only available when bills from a single vendor are selected</div>`}
     </div>
     <div class="pi-amount-row" id="pi-amount-row" style="display:none">
       <input class="pi-amount-input" type="number" min="0" step="0.01" id="pi-amount-input" placeholder="0.00" />
-      <button class="btn-primary" onclick="sendSpecificAmount('${vendorName.replace(/'/g, "\\'")}', this)">Send</button>
+      <button class="btn-primary" onclick="sendBatchSpecificAmount(this)">Send</button>
     </div>
   `;
   document.getElementById('pi-modal').classList.add('visible');
@@ -586,29 +928,34 @@ function closePiModal() {
   document.getElementById('pi-modal').classList.remove('visible');
 }
 
-function showAmountInput(vendorName) {
+function showBatchAmountInput() {
   document.getElementById('pi-amount-row').style.display = 'flex';
   document.getElementById('pi-amount-input').focus();
 }
 
-async function sendSpecificAmount(vendorName, btn) {
+async function sendBatchSpecificAmount(btn) {
   const input = document.getElementById('pi-amount-input');
   const amount = parseFloat(input.value);
   if (isNaN(amount) || amount <= 0) { alert('Enter a valid amount'); return; }
-  await sendPaymentInstruction(vendorName, 'specific', amount, btn);
+  await sendBatchPaymentInstruction('specific', amount, btn);
 }
 
-async function sendPaymentInstruction(vendorName, amountType, amount, btn) {
+async function sendBatchPaymentInstruction(amountType, amount, btn) {
   const allButtons = document.querySelectorAll('#pi-modal-body button');
   allButtons.forEach(b => b.disabled = true);
   const originalText = btn.textContent;
   btn.textContent = 'Sending…';
   try {
-    await apiFetch('/api/ap/payment-instruction', {
+    const selections = Object.keys(selectedBills).map(vendor => ({
+      vendor_name: vendor,
+      doc_numbers: [...selectedBills[vendor].keys()],
+    }));
+    await apiFetch('/api/ap/payment-instruction-batch', {
       method: 'POST',
-      body: JSON.stringify({ vendor_name: vendorName, amount_type: amountType, amount })
+      body: JSON.stringify({ selections, amount_type: amountType, amount })
     });
     document.getElementById('pi-modal-body').innerHTML = `<div class="pi-success">✓ Payment instruction sent to accounts@procleanofatl.com</div>`;
+    clearBillSelection();
     setTimeout(closePiModal, 1800);
   } catch (e) {
     allButtons.forEach(b => b.disabled = false);
@@ -693,6 +1040,219 @@ async function loadDashboard() {
   await requireAuth(['admin']);
   loadDashboard();
 })();
+
+// ── Commission Calculator ──────────────────────────────────────────────────────
+let currentCommissionCompany = 'company2';
+const COMMISSION_PERIOD_LABELS = { last30: 'Last 30 Days', last60: 'Last 60 Days', last90: 'Last 90 Days' };
+
+function setCommissionCompany(key, btn) {
+  currentCommissionCompany = key;
+  document.querySelectorAll('#commission-company-tabs .filter-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  loadCommission(key);
+}
+
+async function loadCommission(companyKey) {
+  const content = document.getElementById('commission-content');
+  content.innerHTML = '<div class="loading"><div class="spinner"></div> Loading…</div>';
+  try {
+    const data = await apiFetch(`/api/commission/${companyKey}`);
+    renderCommission(data, companyKey);
+  } catch (e) {
+    content.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
+  }
+}
+
+function periodBlockHtml(period, data, companyKey) {
+  const b = data.buckets[period];
+  return `
+    <div class="section-title">${COMMISSION_PERIOD_LABELS[period]}</div>
+    <div class="stat-grid">
+      <div class="stat-card" style="--c: var(--blue)">
+        <div class="stat-label">Total Sales</div>
+        <div class="stat-value">${fmtMoney(b.totalSales)}</div>
+        <div class="stat-sub">${b.invoiceCount} invoice${b.invoiceCount === 1 ? '' : 's'}</div>
+      </div>
+      <div class="stat-card" style="--c: #2d3748">
+        <div class="stat-label">Cost (Bills/POs from ProClean)</div>
+        <div class="stat-value">${fmtMoney(b.totalCost)}</div>
+        <div class="stat-sub">${b.billCount} bill${b.billCount === 1 ? '' : 's'}</div>
+      </div>
+      <div class="stat-card" style="--c: var(--green)">
+        <div class="stat-label">Gross Profit</div>
+        <div class="stat-value">${fmtMoney(b.grossProfit)}</div>
+        <div class="stat-sub">Sales &minus; Cost</div>
+      </div>
+      <div class="stat-card" style="--c: var(--amber)">
+        <div class="stat-label">Commission (50%)</div>
+        <div class="stat-value">${fmtMoney(b.commission)}</div>
+        <div class="stat-sub">Net Profit ${fmtMoney(b.netProfit)}</div>
+      </div>
+    </div>
+    <div class="breakdown-table">
+      <table>
+        <tbody>
+          <tr>
+            <td style="width:50%">Shipping Cost</td>
+            <td class="num"><input class="terms-input" style="width:100px;text-align:right" type="number" min="0" step="0.01" id="commission-shipping-${period}" value="${b.shippingCost.toFixed(2)}" oninput="debounceCommissionAdj('${companyKey}','${period}')"></td>
+          </tr>
+          <tr>
+            <td>Credit Card Cost</td>
+            <td class="num"><input class="terms-input" style="width:100px;text-align:right" type="number" min="0" step="0.01" id="commission-cc-${period}" value="${b.ccCost.toFixed(2)}" oninput="debounceCommissionAdj('${companyKey}','${period}')"></td>
+          </tr>
+          <tr>
+            <td style="font-weight:700">Net Profit</td>
+            <td class="num" style="font-weight:700">${fmtMoney(b.netProfit)}</td>
+          </tr>
+          <tr>
+            <td style="font-weight:700;color:var(--amber)">Commission (50% of Net Profit)</td>
+            <td class="num" style="font-weight:700;color:var(--amber)">${fmtMoney(b.commission)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function renderCommission(data, companyKey) {
+  const content = document.getElementById('commission-content');
+
+  const invoiceRows = data.invoices.map(inv => {
+    const date = inv.txnDate ? new Date(inv.txnDate).toLocaleDateString('en-US') : '—';
+    return `<tr><td>${date}</td><td>${inv.docNumber}</td><td>${inv.customerName}</td><td style="text-align:right">${fmtMoney(inv.subtotal)}</td></tr>`;
+  }).join('');
+
+  const billRows = data.bills.map(bill => {
+    const date = bill.txnDate ? new Date(bill.txnDate).toLocaleDateString('en-US') : '—';
+    return `<tr><td>${date}</td><td>${bill.docNumber}</td><td>${bill.vendorName}</td><td style="text-align:right">${fmtMoney(bill.amount)}</td></tr>`;
+  }).join('');
+
+  content.innerHTML = `
+    <p style="font-size:12px;color:var(--text3);margin-bottom:4px">Sale price (invoice subtotal) &minus; cost price (bills/POs from ProClean) &minus; shipping &minus; CC fees = net profit. Commission = 50% of net profit. Shipping/CC aren't pulled from QBO yet — enter them manually per window below.</p>
+    ${periodBlockHtml('last30', data, companyKey)}
+    ${periodBlockHtml('last60', data, companyKey)}
+    ${periodBlockHtml('last90', data, companyKey)}
+
+    <div class="section-title">Invoices (Sales, last 90 days)</div>
+    <div class="breakdown-table">
+      <table>
+        <thead><tr><th>Date</th><th>Invoice #</th><th>Customer</th><th class="num">Subtotal</th></tr></thead>
+        <tbody>${invoiceRows || '<tr><td colspan="4" class="empty-state">No invoices in the last 90 days</td></tr>'}</tbody>
+      </table>
+    </div>
+
+    <div class="section-title">Bills / POs from ProClean (Cost, last 90 days)</div>
+    <div class="breakdown-table">
+      <table>
+        <thead><tr><th>Date</th><th>Bill #</th><th>Vendor</th><th class="num">Amount</th></tr></thead>
+        <tbody>${billRows || '<tr><td colspan="4" class="empty-state">No bills in the last 90 days</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+let commissionAdjTimer = null;
+function debounceCommissionAdj(companyKey, period) {
+  clearTimeout(commissionAdjTimer);
+  commissionAdjTimer = setTimeout(() => saveCommissionAdj(companyKey, period), 800);
+}
+
+async function saveCommissionAdj(companyKey, period) {
+  const shipping = parseFloat(document.getElementById(`commission-shipping-${period}`).value) || 0;
+  const cc = parseFloat(document.getElementById(`commission-cc-${period}`).value) || 0;
+  try {
+    await apiFetch(`/api/commission/${companyKey}/adjustments`, {
+      method: 'PATCH',
+      body: JSON.stringify({ period, shipping_cost: shipping, cc_cost: cc })
+    });
+    await loadCommission(companyKey);
+  } catch (e) {
+    alert('Error saving adjustment: ' + e.message);
+  }
+}
+
+// ── ProClean Profit ──────────────────────────────────────────────────────────
+async function loadProfit() {
+  const content = document.getElementById('profit-content');
+  content.innerHTML = '<div class="loading"><div class="spinner"></div> Loading…</div>';
+  try {
+    const data = await apiFetch('/api/profit/company1');
+    renderProfit(data);
+  } catch (e) {
+    content.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
+  }
+}
+
+function renderProfit(data) {
+  const content = document.getElementById('profit-content');
+  document.getElementById('profit-sub').textContent = `${data.companyName} · ${data.invoiceCount} invoices in the last 90 days`;
+  profitDataCache = data;
+
+  const cards = [
+    { key: 'today', label: 'Today', c: 'var(--blue)' },
+    { key: 'last30', label: 'Last 30 Days', c: 'var(--green)' },
+    { key: 'last60', label: 'Last 60 Days', c: 'var(--amber)' },
+    { key: 'last90', label: 'Last 90 Days', c: '#2d3748' },
+  ];
+
+  content.innerHTML = `
+    <div style="margin-bottom:16px">
+      <button class="btn-primary" onclick="exportProfitExcel()">Export to Excel</button>
+    </div>
+    <div class="stat-grid">
+      ${cards.map(c => {
+        const b = data.buckets[c.key];
+        const totalRevenue = b.invSales + b.otherRevenue;
+        return `<div class="stat-card" style="--c: ${c.c}">
+          <div class="stat-label">${c.label}</div>
+          <div style="margin-top:6px">
+            <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.06em">Inventory Profit</div>
+            <div style="font-size:20px;font-weight:700;font-family:var(--mono);color:var(--text)">${fmtMoney(b.invProfit)}</div>
+            <div class="stat-sub">Sales ${fmtMoney(b.invSales)} &minus; COGS ${fmtMoney(b.invCost)}</div>
+          </div>
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+            <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.06em">Other Revenue (Non-Inventory / Service)</div>
+            <div style="font-size:20px;font-weight:700;font-family:var(--mono);color:var(--text)">${fmtMoney(b.otherRevenue)}</div>
+            <div class="stat-sub">No cost data available</div>
+          </div>
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+            <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.06em">Total Revenue</div>
+            <div style="font-size:16px;font-weight:700;font-family:var(--mono);color:var(--text2)">${fmtMoney(totalRevenue)}</div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+    <p style="font-size:12px;color:var(--text3);margin-top:4px">Inventory items (item_type = Inventory in ProClean) show sales minus COGS (qty &times; purchase cost). Non-inventory and service items show revenue only — no cost data exists for these. Each window is a trailing total from today, not a distinct period.</p>
+  `;
+}
+
+let profitDataCache = null;
+
+function exportProfitExcel() {
+  if (!profitDataCache) return;
+  const header = 'Date,Invoice #,Customer,Inventory Sales,Inventory Cost,Inventory Profit,Other Revenue,Total\n';
+  const rows = profitDataCache.invoices.map(inv => {
+    const date = inv.txnDate ? new Date(inv.txnDate).toLocaleDateString('en-US') : '';
+    return [
+      date,
+      `"${inv.docNumber}"`,
+      `"${(inv.customerName || '').replace(/"/g, '""')}"`,
+      inv.invSales.toFixed(2),
+      inv.invCost.toFixed(2),
+      inv.invProfit.toFixed(2),
+      inv.otherRevenue.toFixed(2),
+      inv.total.toFixed(2),
+    ].join(',');
+  }).join('\n');
+  const blob = new Blob([header + rows], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `proclean-profit-${new Date().toISOString().split('T')[0]}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+
 </script>
 </body>
 </html>
