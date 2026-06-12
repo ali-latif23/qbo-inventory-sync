@@ -646,7 +646,7 @@
       </div>
       <div class="inv-table">
         <div class="inv-thead" id="inv-thead" style="grid-template-columns: 2fr 1fr 110px 110px 110px 110px 110px 110px 36px">
-          <div>Item</div><div>UOM</div><div>Quantity</div><div>Target</div><div>Sale Price</div><div>Cost Price</div><div>Value</div><div>Status</div><div></div>
+          <div>Item</div><div>UOM</div><div>Quantity</div><div>Monthly Consumption</div><div>Sale Price</div><div>Cost Price</div><div>Value</div><div>Status</div><div></div>
         </div>
         <div id="inv-body"><div class="loading"><div class="spinner"></div> Loading…</div></div>
       </div>
@@ -1003,10 +1003,10 @@ function renderInventory() {
     thead.style.gridTemplateColumns = colsSel;
     thead.innerHTML = `
       <div class="inv-row-check"><input type="checkbox" id="select-all-cb" onclick="toggleSelectAll(this)" title="Select all visible"></div>
-      <div>Item</div><div>UOM</div><div>Quantity</div><div>Target</div><div>Sale Price</div><div>Cost Price</div><div>Value</div><div>Status</div><div></div>`;
+      <div>Item</div><div>UOM</div><div>Quantity</div><div>Monthly Consumption</div><div>Sale Price</div><div>Cost Price</div><div>Value</div><div>Status</div><div></div>`;
   } else {
     thead.style.gridTemplateColumns = colsNorm;
-    thead.innerHTML = '<div>Item</div><div>UOM</div><div>Quantity</div><div>Target</div><div>Sale Price</div><div>Cost Price</div><div>Value</div><div>Status</div><div></div>';
+    thead.innerHTML = '<div>Item</div><div>UOM</div><div>Quantity</div><div>Monthly Consumption</div><div>Sale Price</div><div>Cost Price</div><div>Value</div><div>Status</div><div></div>';
   }
 
   if (!filtered.length) {
@@ -1141,7 +1141,7 @@ function updateSelectionBar() {
 function exportSelected() {
   if (!selectedItems.size) return;
   const items = allItems.filter(i => selectedItems.has(i.qbo_id));
-  const header = 'Item Name,SKU,UOM,Qty On Hand,Target Stock,Sale Price,Cost Price,Sale Value,Cost Value\n';
+  const header = 'Item Name,SKU,UOM,Qty On Hand,Monthly Consumption,Sale Price,Cost Price,Sale Value,Cost Value\n';
   const rows = items.map(i => {
     const qty = parseFloat(i.qty_on_hand) || 0;
     const price = parseFloat(i.unit_price) || 0;
@@ -1599,9 +1599,9 @@ function buildPcPkTable(data){
     h+=`<td style="background:#f7f7f7"><span class="pk-total" style="color:${tc}">${item.total_on_water}</span></td>`;
     const ac=getAtlColorPC(item.atl_qty,item.target_stock),bt=item.pk_name==='1616B'?'<span class="bale-tag">BALE</span>':'';
     h+=`<td style="background:#ebf8ff"><span class="pk-atl" style="color:${ac}">${item.atl_qty!==null?item.atl_qty:'--'}</span>${bt}</td>`;
-    // Monthly Consumption — editable, drives the Months of Stock calculation
-    const cv=item.monthly_consumption!==null&&item.monthly_consumption!==undefined?item.monthly_consumption:'';
-    h+=`<td style="background:#f0fff4"><input class="pk-input" type="number" min="0" step="1" value="${cv}" placeholder="--" oninput="pcDb('cons_${s}',()=>pcSaveConsumption('${item.pk_name}',this.value))" /></td>`;
+    // Monthly Consumption (= proclean_items.target_stock) — editable here, drives the Months of Stock calculation
+    const cv=item.target_stock!==null&&item.target_stock!==undefined?item.target_stock:'';
+    h+=`<td style="background:#f0fff4"><input class="pk-input" type="number" min="0" step="1" value="${cv}" placeholder="--" oninput="pcDb('cons_${s}',()=>pcSaveAtlTarget('${item.pk_name}',this.value))" /></td>`;
     // Months of Stock = (Pakistan qty + total on water + ATL qty) / Monthly Consumption
     if(item.months_of_stock!==null&&item.months_of_stock!==undefined){
       const mos=item.months_of_stock,mosClass=mos<3?'months-stock-badge months-stock-low':'months-stock-badge months-stock-ok';
@@ -1618,13 +1618,13 @@ function buildPcPkTable(data){
 async function pcSaveQty(n,v){try{await apiFetch('/api/pk/inventory/'+encodeURIComponent(n),{method:'PATCH',body:JSON.stringify({qty_in_pakistan:parseFloat(v)||0})});}catch(e){}}
 async function pcSaveShipQty(id,n,v){try{await apiFetch('/api/pk/shipments/'+id+'/items/'+encodeURIComponent(n),{method:'PATCH',body:JSON.stringify({quantity:parseFloat(v)||0})});}catch(e){}}
 async function pcSaveNotes(n,v){try{await apiFetch('/api/pk/inventory/'+encodeURIComponent(n)+'/notes',{method:'PATCH',body:JSON.stringify({notes:v||null})});}catch(e){}}
-async function pcSaveConsumption(n,v){try{await apiFetch('/api/pk/inventory/'+encodeURIComponent(n)+'/consumption',{method:'PATCH',body:JSON.stringify({monthly_consumption:v===''?null:parseFloat(v)})});loadPkInventoryPC();}catch(e){}}
+async function pcSaveAtlTarget(n,v){try{await apiFetch('/api/pk/inventory/'+encodeURIComponent(n)+'/atl-target',{method:'PATCH',body:JSON.stringify({target_stock:v===''?null:parseFloat(v)})});loadPkInventoryPC();}catch(e){}}
 async function pcZeroOut(id,name){if(!confirm('Zero out and remove "'+name+'"?'))return;try{await apiFetch('/api/pk/shipments/'+id+'/zero-out',{method:'POST'});loadPkInventoryPC();}catch(e){alert('Error: '+e.message);}}
 async function pcNotify(recipient,itemName,notesId,btn){const note=document.getElementById(notesId)?.value?.trim();if(!note){alert('Write a note first.');return;}btn.textContent='Sending...';btn.disabled=true;try{await apiFetch('/api/pk/notify',{method:'POST',body:JSON.stringify({recipient,note,item_name:itemName})});btn.textContent='Sent!';setTimeout(()=>{btn.textContent=recipient==='nihad'?'Notify Nihad':'Notify Mateen';btn.disabled=false;},3000);}catch(e){btn.textContent='Failed';setTimeout(()=>{btn.disabled=false;},3000);}}
 function showAddShipmentPC(){document.getElementById('add-shipment-modal-pc').style.display='flex';document.getElementById('pc-new-ship-name').value='';document.getElementById('pc-new-ship-eta').value='';document.getElementById('pc-add-ship-error').style.display='none';}
 function hideAddShipmentPC(){document.getElementById('add-shipment-modal-pc').style.display='none';}
 async function addShipmentPC(){const name=document.getElementById('pc-new-ship-name').value.trim(),eta=document.getElementById('pc-new-ship-eta').value,errEl=document.getElementById('pc-add-ship-error');if(!name){errEl.textContent='Name required';errEl.style.display='block';return;}try{const res=await apiFetch('/api/pk/shipments',{method:'POST',body:JSON.stringify({name,eta:eta||null})});if(!res.id){errEl.textContent=res.error||'Error';errEl.style.display='block';return;}hideAddShipmentPC();loadPkInventoryPC();}catch(e){errEl.textContent=e.message;errEl.style.display='block';}}
-async function handlePkUploadPC(event){const file=event.target.files[0];if(!file)return;const text=await file.text();const rows=parseCsv(text).map(r=>({pk_name:r.item_name||r.pk_name||'',qty_in_pakistan:r.qty_in_pakistan!==''?r.qty_in_pakistan:undefined,monthly_consumption:r.monthly_consumption!==''?r.monthly_consumption:undefined,notes:r.notes!==''?r.notes:undefined}));event.target.value='';try{const res=await apiFetch('/api/pk/bulk-preview',{method:'POST',body:JSON.stringify({rows})});showBulkModal(res.changes,'pakistan');}catch(e){alert('Error: '+e.message);}}
+async function handlePkUploadPC(event){const file=event.target.files[0];if(!file)return;const text=await file.text();const rows=parseCsv(text).map(r=>({pk_name:r.item_name||r.pk_name||'',qty_in_pakistan:r.qty_in_pakistan!==''?r.qty_in_pakistan:undefined,notes:r.notes!==''?r.notes:undefined}));event.target.value='';try{const res=await apiFetch('/api/pk/bulk-preview',{method:'POST',body:JSON.stringify({rows})});showBulkModal(res.changes,'pakistan');}catch(e){alert('Error: '+e.message);}}
 
 // Bulk Upload
 let pendingBulkChanges=[];
@@ -1644,7 +1644,7 @@ function openProCleanFilePicker() { closeUploadInstructions(); document.getEleme
 function openPakistanFilePicker() { closeUploadInstructions(); document.getElementById('pakistan-file-input-pc').click(); }
 
 function parseCsv(text){const lines=text.trim().split('\n');const headers=lines[0].split(',').map(h=>h.replace(/"/g,'').trim().toLowerCase().replace(/ /g,'_').replace(/[(]/g,'').replace(/[)]/g,''));return lines.slice(1).map(line=>{const vals=[];let cur='',inQ=false;for(const ch of line){if(ch==='"')inQ=!inQ;else if(ch===','&&!inQ){vals.push(cur.trim());cur='';}else cur+=ch;}vals.push(cur.trim());const row={};headers.forEach((h,i)=>row[h]=vals[i]||'');return row;});}
-async function handleProCleanUpload(event){const file=event.target.files[0];if(!file)return;const text=await file.text();const rows=parseCsv(text).map(r=>({name:r.item_name||r.name||'',sku:r.sku||'',qty_on_hand:r.qty_on_hand!==''?r.qty_on_hand:undefined,target_stock:(r.target_stock!==undefined&&r.target_stock!=='')?r.target_stock:undefined,unit_price:r.sale_price!==''?r.sale_price:undefined,purchase_cost:r.cost_price!==''?r.cost_price:undefined,uom:r.uom||undefined,description:r.sales_description||r.description||undefined}));event.target.value='';try{const res=await apiFetch('/api/proclean/bulk-preview',{method:'POST',body:JSON.stringify({rows})});showBulkModal(res.changes,'proclean');}catch(e){alert('Error: '+e.message);}}
+async function handleProCleanUpload(event){const file=event.target.files[0];if(!file)return;const text=await file.text();const rows=parseCsv(text).map(r=>({name:r.item_name||r.name||'',sku:r.sku||'',qty_on_hand:r.qty_on_hand!==''?r.qty_on_hand:undefined,target_stock:(r.monthly_consumption!==undefined&&r.monthly_consumption!=='')?r.monthly_consumption:undefined,unit_price:r.sale_price!==''?r.sale_price:undefined,purchase_cost:r.cost_price!==''?r.cost_price:undefined,uom:r.uom||undefined,description:r.sales_description||r.description||undefined}));event.target.value='';try{const res=await apiFetch('/api/proclean/bulk-preview',{method:'POST',body:JSON.stringify({rows})});showBulkModal(res.changes,'proclean');}catch(e){alert('Error: '+e.message);}}
 function showBulkModal(changes,type){pendingBulkChanges=changes;document.getElementById('bulk-modal').style.display='flex';const valid=changes.filter(c=>c.status==='changed'),notFound=changes.filter(c=>c.status==='not_found');document.getElementById('bulk-apply-btn').dataset.type=type;if(valid.length===0&&notFound.length===0){document.getElementById('bulk-modal-body').innerHTML='<div style="text-align:center;padding:40px;color:var(--text3)">No changes detected.</div>';document.getElementById('bulk-apply-btn').style.display='none';return;}document.getElementById('bulk-apply-btn').style.display='block';let html='';if(valid.length>0){html+='<div style="font-size:13px;font-weight:600;margin-bottom:12px">'+valid.length+' item(s) with changes:</div>';html+='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:var(--surface2)"><th style="padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)">Item</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)">Field</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)">Current</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)">New</th></tr></thead><tbody>';for(const c of valid)for(const f of c.fields)html+=`<tr style="border-bottom:1px solid var(--border)"><td style="padding:8px 12px;font-weight:500">${c.name||c.pk_name}</td><td style="padding:8px 12px;color:var(--text2)">${f.label}</td><td style="padding:8px 12px;font-family:var(--mono);color:var(--text3)">${f.current}</td><td style="padding:8px 12px;font-family:var(--mono);color:var(--green);font-weight:600">${f.new}</td></tr>`;html+='</tbody></table>';}if(notFound.length>0)html+='<div style="margin-top:16px;font-size:12px;color:var(--text3)">'+notFound.length+' not found: '+notFound.map(c=>c.identifier||c.pk_name).join(', ')+'</div>';document.getElementById('bulk-modal-body').innerHTML=html;}
 async function applyBulkUpload(){const btn=document.getElementById('bulk-apply-btn'),type=btn.dataset.type,valid=pendingBulkChanges.filter(c=>c.status==='changed');btn.textContent='Applying...';btn.disabled=true;try{const ep=type==='proclean'?'/api/proclean/bulk-apply':'/api/pk/bulk-apply';const res=await apiFetch(ep,{method:'POST',body:JSON.stringify({changes:valid})});closeBulkModal();if(type==='proclean'){await loadInventory();await loadDashboard();}alert('Done - '+res.success+' updated'+(res.failed>0?', '+res.failed+' failed':'')+('.'))}catch(e){alert('Error: '+e.message);}finally{btn.textContent='Apply Changes';btn.disabled=false;}}
 function closeBulkModal(){document.getElementById('bulk-modal').style.display='none';pendingBulkChanges=[];}
@@ -1681,7 +1681,7 @@ function closeBulkModal(){document.getElementById('bulk-modal').style.display='n
           <tr style="background:var(--surface2)"><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Sale Price</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the selling price</td><td style="padding:7px 10px;border:1px solid var(--border);color:var(--green)">Yes — ProClean QBO</td></tr>
           <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Cost Price</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the purchase cost</td><td style="padding:7px 10px;border:1px solid var(--border);color:var(--green)">Yes — ProClean QBO</td></tr>
           <tr style="background:var(--surface2)"><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">UOM</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates how the unit is displayed on the website only</td><td style="padding:7px 10px;border:1px solid var(--border);color:#744210">Website only — not QBO</td></tr>
-          <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Target Stock</td><td style="padding:7px 10px;border:1px solid var(--border)">Sets the target stock level shown next to quantity</td><td style="padding:7px 10px;border:1px solid var(--border);color:#744210">Website only — not QBO</td></tr>
+          <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Monthly Consumption</td><td style="padding:7px 10px;border:1px solid var(--border)">Sets the target stock level shown next to quantity, used to calculate Months of Stock on the Pakistan tab</td><td style="padding:7px 10px;border:1px solid var(--border);color:#744210">Website only — not QBO</td></tr>
           <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Sales Description</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the sales description</td><td style="padding:7px 10px;border:1px solid var(--border);color:var(--green)">Yes — all 3 companies</td></tr>
         </tbody>
       </table>
