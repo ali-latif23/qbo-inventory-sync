@@ -419,7 +419,8 @@ function renderAr(data, companyKey) {
     return;
   }
   if (!data.rows.length) {
-    tbody.innerHTML = '<tr><td colspan="9"><div class="empty-state">No open receivables</div></td></tr>';
+    const raw = data._rawReport ? `<pre style="text-align:left;white-space:pre-wrap;font-size:11px;background:var(--surface2);padding:12px;border-radius:8px;max-height:300px;overflow:auto;margin-top:12px">${JSON.stringify(data._rawReport, null, 2).replace(/</g, '&lt;')}</pre>` : '';
+    tbody.innerHTML = `<tr><td colspan="9"><div class="empty-state">No open receivables (or report format not recognized — raw response below)${raw}</div></td></tr>`;
     return;
   }
   tbody.innerHTML = data.rows.map(r => {
@@ -481,7 +482,8 @@ async function loadAp() {
       return;
     }
     if (!data.rows.length) {
-      tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state">No open payables</div></td></tr>';
+      const raw = data._rawReport ? `<pre style="text-align:left;white-space:pre-wrap;font-size:11px;background:var(--surface2);padding:12px;border-radius:8px;max-height:300px;overflow:auto;margin-top:12px">${JSON.stringify(data._rawReport, null, 2).replace(/</g, '&lt;')}</pre>` : '';
+      tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state">No open payables (or report format not recognized — raw response below)${raw}</div></td></tr>`;
       return;
     }
     tbody.innerHTML = data.rows.map(r => `<tr>
