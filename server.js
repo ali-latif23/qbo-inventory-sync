@@ -94,6 +94,13 @@ async function initDb() {
       note TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS ar_customer_terms (
+      company_key TEXT NOT NULL,
+      customer_name TEXT NOT NULL,
+      terms_days NUMERIC NOT NULL,
+      last_updated TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (company_key, customer_name)
+    );
   `);
   // Migration: allow movement logging even when item isn't matched in proclean_items.
   // Old constraint (NOT NULL + FK) silently blocked logs for unmatched items.
@@ -154,6 +161,12 @@ async function saveField(key, value) {
     INSERT INTO app_state (key, value, updated_at) VALUES ($1, $2, NOW())
     ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
   `, [key, JSON.stringify(value)]);
+}
+
+// Generic single-key read from app_state, used for scheduler bookkeeping etc.
+async function getField(key, defaultValue = null) {
+  const res = await pool.query('SELECT value FROM app_state WHERE key = $1', [key]);
+  return res.rows.length ? res.rows[0].value : defaultValue;
 }
 
 async function saveData(data) {
@@ -2040,6 +2053,335 @@ app.get('/manifest-production.json', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'manifest-production.json'));
 });
 
+// ─── ACCOUNTING (AR / AP) ─────────────────────────────────────────────────────
+
+const ACCOUNTING_EMAIL_TO = 'accounts@procleanofatl.com';
+const ACCOUNTING_EMAIL_CC = ['ylatif@procleanofatl.com', 'nihad@procleanofatl.com', '23alilatif@gmail.com'];
+
+// Parses a QBO AgedReceivables / AgedPayables report into a flat array of
+// { name, id, current, d1_30, d31_60, d61_90, d91_plus, total }.
+// Skips section/summary rows (e.g. the "TOTAL" row at the bottom).
+function parseAgedReport(report) {
+  const out = [];
+  const walk = (rows) => {
+    for (const r of rows || []) {
+      if (r.type === 'Data' && r.ColData && r.ColData.length >= 7) {
+        const name = r.ColData[0].value;
+        if (!name || /^total/i.test(name)) continue;
+        out.push({
+          name,
+          id: r.ColData[0].id || null,
+          current: parseFloat(r.ColData[1].value) || 0,
+          d1_30: parseFloat(r.ColData[2].value) || 0,
+          d31_60: parseFloat(r.ColData[3].value) || 0,
+          d61_90: parseFloat(r.ColData[4].value) || 0,
+          d91_plus: parseFloat(r.ColData[5].value) || 0,
+          total: parseFloat(r.ColData[6].value) || 0,
+        });
+      }
+      // Some reports nest customer/vendor rows inside Section rows
+      if (r.Rows && r.Rows.Row) walk(r.Rows.Row);
+    }
+  };
+  walk(report?.Rows?.Row);
+  return out;
+}
+
+const AR_COMPANY_KEYS = ['company1', 'company2', 'company3'];
+
+// Fetches AgedReceivables for a company, merges in saved Terms and computes
+// each customer's overdue status by checking their actual open invoices
+// against the Terms (in days) set on the website.
+//   status: 'ok' | 'overdue' | 'no_terms'
+async function getArData(companyKey) {
+  const company = appData.companies[companyKey];
+  if (!company?.tokens) return { companyName: company?.name || companyKey, asOf: null, rows: [] };
+
+  const [report, invoiceData, termsRes] = await Promise.all([
+    qboGet(companyKey, 'reports/AgedReceivables'),
+    qboGet(companyKey, `query?query=${encodeURIComponent("SELECT * FROM Invoice WHERE Balance > '0' MAXRESULTS 1000")}`),
+    pool.query('SELECT customer_name, terms_days FROM ar_customer_terms WHERE company_key = $1', [companyKey]),
+  ]);
+
+  const rows = parseAgedReport(report);
+
+  // Map customer name -> list of open invoices (TxnDate + Balance)
+  const invoicesByCustomer = {};
+  for (const inv of (invoiceData.QueryResponse?.Invoice || [])) {
+    const custName = inv.CustomerRef?.name;
+    if (!custName) continue;
+    const key = custName.toUpperCase();
+    if (!invoicesByCustomer[key]) invoicesByCustomer[key] = [];
+    invoicesByCustomer[key].push({
+      docNumber: inv.DocNumber || inv.Id,
+      txnDate: inv.TxnDate,
+      balance: parseFloat(inv.Balance) || 0,
+    });
+  }
+
+  const termsMap = {};
+  for (const t of termsRes.rows) termsMap[t.customer_name.toUpperCase()] = parseFloat(t.terms_days);
+
+  const now = Date.now();
+  const MS_PER_DAY = 86400000;
+
+  for (const row of rows) {
+    const key = row.name.toUpperCase();
+    const termsDays = termsMap[key] ?? null;
+    row.terms_days = termsDays;
+
+    if (termsDays == null) {
+      row.status = 'no_terms';
+      continue;
+    }
+
+    const invoices = invoicesByCustomer[key] || [];
+    const overdueInvoices = invoices.filter(inv => {
+      const ageDays = (now - new Date(inv.txnDate).getTime()) / MS_PER_DAY;
+      return inv.balance > 0 && ageDays > termsDays;
+    });
+    row.status = overdueInvoices.length > 0 ? 'overdue' : 'ok';
+    row.oldest_invoice_days = invoices.length
+      ? Math.floor(Math.max(...invoices.map(inv => (now - new Date(inv.txnDate).getTime()) / MS_PER_DAY)))
+      : null;
+  }
+
+  return { companyName: company.name, asOf: report?.Header?.Time || null, rows };
+}
+
+// Fetches AgedPayables for ProClean and the underlying open bills (for itemized
+// payment instruction emails), grouped by vendor name.
+async function getApData() {
+  const company = appData.companies['company1'];
+  if (!company?.tokens) return { companyName: company?.name || 'ProClean', asOf: null, rows: [], billsByVendor: {} };
+
+  const [report, billData] = await Promise.all([
+    qboGet('company1', 'reports/AgedPayables'),
+    qboGet('company1', `query?query=${encodeURIComponent("SELECT * FROM Bill WHERE Balance > '0' MAXRESULTS 1000")}`),
+  ]);
+
+  const rows = parseAgedReport(report);
+
+  const billsByVendor = {};
+  for (const bill of (billData.QueryResponse?.Bill || [])) {
+    const vendorName = bill.VendorRef?.name;
+    if (!vendorName) continue;
+    const key = vendorName.toUpperCase();
+    if (!billsByVendor[key]) billsByVendor[key] = [];
+    billsByVendor[key].push({
+      docNumber: bill.DocNumber || bill.Id,
+      txnDate: bill.TxnDate,
+      dueDate: bill.DueDate || null,
+      balance: parseFloat(bill.Balance) || 0,
+    });
+  }
+
+  return { companyName: company.name, asOf: report?.Header?.Time || null, rows, billsByVendor };
+}
+
+// GET AR for a single company (company1/2/3)
+app.get('/api/ar/:companyKey', async (req, res) => {
+  const { companyKey } = req.params;
+  if (!AR_COMPANY_KEYS.includes(companyKey)) return res.status(400).json({ error: 'Invalid company' });
+  try {
+    const data = await getArData(companyKey);
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PATCH Terms (days) for a customer on a given company's AR
+app.patch('/api/ar/:companyKey/terms', async (req, res) => {
+  const { companyKey } = req.params;
+  const { customer_name, terms_days } = req.body;
+  if (!AR_COMPANY_KEYS.includes(companyKey)) return res.status(400).json({ error: 'Invalid company' });
+  if (!customer_name) return res.status(400).json({ error: 'customer_name required' });
+  try {
+    if (terms_days === '' || terms_days === null || terms_days === undefined) {
+      await pool.query('DELETE FROM ar_customer_terms WHERE company_key=$1 AND customer_name=$2', [companyKey, customer_name]);
+    } else {
+      await pool.query(`
+        INSERT INTO ar_customer_terms (company_key, customer_name, terms_days, last_updated)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (company_key, customer_name) DO UPDATE SET terms_days=$3, last_updated=NOW()
+      `, [companyKey, customer_name, parseFloat(terms_days)]);
+    }
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET AP for ProClean (the only company with bills)
+app.get('/api/ap/company1', async (req, res) => {
+  try {
+    const data = await getApData();
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST send a payment instruction email for a vendor.
+// amount_type: 'full' (pay the full outstanding balance) or 'specific' (pay req.body.amount)
+app.post('/api/ap/payment-instruction', async (req, res) => {
+  const { vendor_name, amount_type, amount } = req.body;
+  if (!vendor_name) return res.status(400).json({ error: 'vendor_name required' });
+  if (!['full', 'specific'].includes(amount_type)) return res.status(400).json({ error: 'amount_type must be full or specific' });
+  if (amount_type === 'specific' && (amount === undefined || amount === null || amount === '' || isNaN(parseFloat(amount)))) {
+    return res.status(400).json({ error: 'amount required for specific amount_type' });
+  }
+
+  try {
+    const { billsByVendor } = await getApData();
+    const bills = billsByVendor[vendor_name.toUpperCase()] || [];
+    const totalBalance = bills.reduce((sum, b) => sum + b.balance, 0);
+    const amountToPay = amount_type === 'full' ? totalBalance : parseFloat(amount);
+
+    const billRows = bills.map(b => `
+      <tr>
+        <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-family:monospace;font-size:13px">${b.docNumber}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px">${b.txnDate ? new Date(b.txnDate).toLocaleDateString('en-US') : '—'}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;text-align:right">$${b.balance.toFixed(2)}</td>
+      </tr>`).join('');
+
+    const html = `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+        <div style="background:#2d3748;padding:20px 24px;border-radius:8px 8px 0 0">
+          <h2 style="color:white;margin:0;font-size:18px">💸 Payment Instruction</h2>
+          <p style="color:#cbd5e0;margin:4px 0 0;font-size:13px">ProClean Accounting</p>
+        </div>
+        <div style="background:#f7fafc;padding:24px;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px">
+          <p style="margin:0 0 16px;color:#4a5568;font-size:14px">Please process a payment to the following vendor:</p>
+          <p style="margin:0 0 16px;color:#1a202c;font-size:18px;font-weight:700">${vendor_name}</p>
+          <table style="width:100%;border-collapse:collapse;background:white;border:1px solid #e2e8f0;border-radius:4px;margin-bottom:16px">
+            <thead>
+              <tr style="background:#edf2f7">
+                <th style="padding:8px 12px;text-align:left;font-size:11px;color:#718096;text-transform:uppercase">Bill #</th>
+                <th style="padding:8px 12px;text-align:left;font-size:11px;color:#718096;text-transform:uppercase">Date</th>
+                <th style="padding:8px 12px;text-align:right;font-size:11px;color:#718096;text-transform:uppercase">Amount</th>
+              </tr>
+            </thead>
+            <tbody>${billRows}</tbody>
+          </table>
+          <div style="display:flex;justify-content:space-between;padding:8px 0;color:#4a5568;font-size:14px">
+            <span>Total Outstanding Balance:</span>
+            <span style="font-family:monospace">$${totalBalance.toFixed(2)}</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:12px 0;margin-top:8px;border-top:2px solid #2d3748;color:#1a202c;font-size:16px;font-weight:700">
+            <span>Amount to Pay${amount_type === 'specific' ? ' (Partial)' : ' (Full Balance)'}:</span>
+            <span style="font-family:monospace">$${amountToPay.toFixed(2)}</span>
+          </div>
+          <p style="margin:16px 0 0;color:#a0aec0;font-size:12px">Sent via ProClean Accounting · ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} ET</p>
+        </div>
+      </div>`;
+
+    const ok = await sendResendEmail({
+      to: ACCOUNTING_EMAIL_TO,
+      cc: ACCOUNTING_EMAIL_CC,
+      subject: `Payment Instruction — ${vendor_name} ($${amountToPay.toFixed(2)})`,
+      html,
+    });
+
+    if (ok) res.json({ ok: true });
+    else res.status(500).json({ error: 'Failed to send email' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Weekly overdue-receivables reminder ────────────────────────────────────────
+// Every Wednesday at 9am America/New_York, emails accounts@procleanofatl.com a
+// list of customers (across all 3 companies) whose open invoices have passed
+// their configured Terms. Customers with no Terms set are excluded — those are
+// only flagged visually on the site, not emailed.
+async function sendOverdueReminderEmail() {
+  try {
+    const sections = [];
+    for (const companyKey of AR_COMPANY_KEYS) {
+      const { companyName, rows } = await getArData(companyKey);
+      const overdue = rows.filter(r => r.status === 'overdue');
+      if (!overdue.length) continue;
+      const rowsHtml = overdue.map(r => `
+        <tr>
+          <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px">${r.name}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;text-align:center">${r.terms_days}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;text-align:center">${r.oldest_invoice_days != null ? r.oldest_invoice_days : '—'}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:13px;text-align:right;font-family:monospace">$${r.total.toFixed(2)}</td>
+        </tr>`).join('');
+      sections.push(`
+        <h3 style="margin:20px 0 8px;color:#1a202c;font-size:15px">${companyName}</h3>
+        <table style="width:100%;border-collapse:collapse;background:white;border:1px solid #e2e8f0;border-radius:4px;margin-bottom:8px">
+          <thead>
+            <tr style="background:#edf2f7">
+              <th style="padding:8px 12px;text-align:left;font-size:11px;color:#718096;text-transform:uppercase">Customer</th>
+              <th style="padding:8px 12px;text-align:center;font-size:11px;color:#718096;text-transform:uppercase">Terms (days)</th>
+              <th style="padding:8px 12px;text-align:center;font-size:11px;color:#718096;text-transform:uppercase">Oldest Invoice (days)</th>
+              <th style="padding:8px 12px;text-align:right;font-size:11px;color:#718096;text-transform:uppercase">Balance</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>`);
+    }
+
+    if (!sections.length) {
+      console.log('[AR Reminder] No customers past terms — skipping email');
+      return;
+    }
+
+    const html = `
+      <div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto">
+        <div style="background:#c53030;padding:20px 24px;border-radius:8px 8px 0 0">
+          <h2 style="color:white;margin:0;font-size:18px">⚠️ Weekly Overdue Receivables</h2>
+          <p style="color:#fed7d7;margin:4px 0 0;font-size:13px">ProClean Accounting · ${new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
+        </div>
+        <div style="background:#f7fafc;padding:24px;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px">
+          <p style="margin:0 0 8px;color:#4a5568;font-size:14px">The following customers have open invoices that have passed their configured payment terms:</p>
+          ${sections.join('')}
+          <p style="margin:16px 0 0;color:#a0aec0;font-size:12px">Sent via ProClean Accounting · ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} ET</p>
+        </div>
+      </div>`;
+
+    const ok = await sendResendEmail({
+      to: ACCOUNTING_EMAIL_TO,
+      cc: ACCOUNTING_EMAIL_CC,
+      subject: '⚠️ Weekly Overdue Receivables Report',
+      html,
+    });
+    console.log(ok ? '[AR Reminder] Sent' : '[AR Reminder] Failed to send');
+  } catch (err) {
+    console.error('[AR Reminder] Error:', err.message);
+  }
+}
+
+// Checks every 15 minutes; fires once when it's Wednesday 9am America/New_York
+// and hasn't already fired for that date (tracked in app_state).
+function startArReminderScheduler() {
+  setInterval(async () => {
+    try {
+      const now = new Date();
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit'
+      }).formatToParts(now);
+      const get = type => parts.find(p => p.type === type)?.value;
+      const weekday = get('weekday'); // e.g. "Wed"
+      const hour = parseInt(get('hour'), 10);
+      const dateStr = `${get('year')}-${get('month')}-${get('day')}`;
+
+      if (weekday !== 'Wed' || hour !== 9) return;
+
+      const lastSent = await getField('arReminderLastSent', null);
+      if (lastSent === dateStr) return;
+
+      await sendOverdueReminderEmail();
+      await saveField('arReminderLastSent', dateStr);
+    } catch (err) {
+      console.error('[AR Reminder Scheduler] Error:', err.message);
+    }
+  }, 15 * 60 * 1000);
+}
+
+// Serve Accounting UI (AR/AP — accounting role + admin)
+app.get('/accounting', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'accounting.html'));
+});
+app.get('/accounting/*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'accounting.html'));
+});
+
 // ─── START ────────────────────────────────────────────────────────────────────
 initDb()
   .then(() => loadData())
@@ -2047,6 +2389,7 @@ initDb()
     appData = data;
     startProCleanPoller();
     seedPkInventory();
+    startArReminderScheduler();
     app.listen(CONFIG.port, () => {
       console.log(`\n🚀 QBO Inventory Sync running on port ${CONFIG.port}`);
       console.log(`   Dashboard: http://localhost:${CONFIG.port}`);
