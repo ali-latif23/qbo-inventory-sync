@@ -2065,7 +2065,7 @@ function parseAgedReport(report) {
   const out = [];
   const walk = (rows) => {
     for (const r of rows || []) {
-      if (r.type === 'Data' && r.ColData && r.ColData.length >= 7) {
+      if (r.type !== 'Section' && r.ColData && r.ColData.length >= 7) {
         const name = r.ColData[0].value;
         if (!name || /^total/i.test(name)) continue;
         out.push({
