@@ -71,7 +71,6 @@ async function initDb() {
     ALTER TABLE pk_inventory ADD COLUMN IF NOT EXISTS target_stock NUMERIC;
     ALTER TABLE pk_inventory ADD COLUMN IF NOT EXISTS notes TEXT;
     ALTER TABLE pk_inventory ADD COLUMN IF NOT EXISTS is_hot BOOLEAN NOT NULL DEFAULT FALSE;
-    ALTER TABLE pk_inventory ADD COLUMN IF NOT EXISTS monthly_consumption NUMERIC;
     CREATE TABLE IF NOT EXISTS pk_shipments (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
@@ -1410,7 +1409,7 @@ app.post('/api/proclean/bulk-preview', async (req, res) => {
       if (row.unit_price!==undefined&&row.unit_price!==''&&parseFloat(row.unit_price)!==parseFloat(item.unit_price)) fc.fields.push({ field:'unit_price', label:'Sale Price', current:parseFloat(item.unit_price), new:parseFloat(row.unit_price) });
       if (row.purchase_cost!==undefined&&row.purchase_cost!==''&&parseFloat(row.purchase_cost)!==parseFloat(item.purchase_cost)) fc.fields.push({ field:'purchase_cost', label:'Cost Price', current:parseFloat(item.purchase_cost), new:parseFloat(row.purchase_cost) });
 
-      if (row.target_stock!==undefined&&row.target_stock!==''&&parseFloat(row.target_stock)!==(item.target_stock!=null?parseFloat(item.target_stock):NaN)) fc.fields.push({ field:'target_stock', label:'Target Stock (display only)', current:item.target_stock!=null?parseFloat(item.target_stock):'—', new:parseFloat(row.target_stock) });
+      if (row.target_stock!==undefined&&row.target_stock!==''&&parseFloat(row.target_stock)!==(item.target_stock!=null?parseFloat(item.target_stock):NaN)) fc.fields.push({ field:'target_stock', label:'Monthly Consumption (display only)', current:item.target_stock!=null?parseFloat(item.target_stock):'—', new:parseFloat(row.target_stock) });
       if (row.uom!==undefined&&row.uom!==''&&row.uom!==item.uom) fc.fields.push({ field:'uom', label:'UOM (display only)', current:item.uom, new:row.uom });
       if (row.description!==undefined&&row.description!==''&&row.description!==(item.description||'')) fc.fields.push({ field:'description', label:'Description', current:item.description||'', new:row.description });
       if (fc.fields.length > 0) { fc.status = 'changed'; changes.push(fc); }
@@ -1525,8 +1524,7 @@ app.post('/api/pk/bulk-preview', async (req, res) => {
       if (!item) { changes.push({ pk_name: pkName, status: 'not_found' }); continue; }
       const fc = { pk_name: item.pk_name, fields: [] };
       if (row.qty_in_pakistan!==undefined&&row.qty_in_pakistan!==''&&parseFloat(row.qty_in_pakistan)!==parseFloat(item.qty_in_pakistan)) fc.fields.push({ field:'qty_in_pakistan', label:'Qty in Pakistan', current:parseFloat(item.qty_in_pakistan), new:parseFloat(row.qty_in_pakistan) });
-      // target_stock intentionally excluded — it is now sourced read-only from proclean_items.target_stock
-      if (row.monthly_consumption!==undefined&&row.monthly_consumption!==''&&parseFloat(row.monthly_consumption)!==parseFloat(item.monthly_consumption||0)) fc.fields.push({ field:'monthly_consumption', label:'Monthly Consumption', current:item.monthly_consumption, new:parseFloat(row.monthly_consumption) });
+      // target_stock ("Monthly Consumption") intentionally excluded from bulk upload — edited inline, sourced from proclean_items.target_stock
       if (row.notes!==undefined&&row.notes!==(item.notes||'')) fc.fields.push({ field:'notes', label:'Notes', current:item.notes||'', new:row.notes });
       // is_hot intentionally removed — Hot toggle feature retired
       for (const ship of shipRes.rows) {
@@ -1551,8 +1549,7 @@ app.post('/api/pk/bulk-apply', async (req, res) => {
     try {
       for (const f of change.fields) {
         if (f.field==='qty_in_pakistan') await pool.query('UPDATE pk_inventory SET qty_in_pakistan=$1,last_updated=NOW() WHERE pk_name=$2',[f.new,change.pk_name]);
-        // target_stock case removed — now sourced read-only from proclean_items
-        else if (f.field==='monthly_consumption') await pool.query('UPDATE pk_inventory SET monthly_consumption=$1,last_updated=NOW() WHERE pk_name=$2',[f.new,change.pk_name]);
+        // target_stock ("Monthly Consumption") edited inline only — no bulk-apply case
         else if (f.field==='notes') await pool.query('UPDATE pk_inventory SET notes=$1,last_updated=NOW() WHERE pk_name=$2',[f.new||null,change.pk_name]);
         else if (f.field.startsWith('shipment_')) await pool.query('INSERT INTO pk_shipment_items (shipment_id,pk_name,quantity) VALUES ($1,$2,$3) ON CONFLICT (shipment_id,pk_name) DO UPDATE SET quantity=$3',[f.shipment_id,change.pk_name,f.new]);
       }
@@ -1831,7 +1828,7 @@ app.get('/api/pk/inventory', async (req, res) => {
     const items = itemsRes.rows.map(item => {
       const lookupName = (item.proclean_name || item.pk_name).toUpperCase();
       const atl_qty = atlMap[lookupName] ?? null;
-      // target_stock is now sourced from proclean_items — it reflects what was set on the ProClean site
+      // target_stock is sourced from proclean_items.target_stock — displayed/edited here as "Monthly Consumption"
       const target_stock = atlTargetMap[lookupName] ?? null;
       const shipments = shipmentsRes.rows.map(s => ({
         shipment_id: s.id,
@@ -1839,11 +1836,10 @@ app.get('/api/pk/inventory', async (req, res) => {
       }));
       const total_on_water = shipments.reduce((sum, s) => sum + s.qty, 0);
 
-      // Months of Stock = (Pakistan qty + total on water + ATL qty) / monthly consumption
-      const monthlyConsumption = item.monthly_consumption != null ? parseFloat(item.monthly_consumption) : null;
+      // Months of Stock = (Pakistan qty + total on water + ATL qty) / Monthly Consumption (target_stock)
       const totalAvailable = (parseFloat(item.qty_in_pakistan) || 0) + total_on_water + (atl_qty || 0);
-      const months_of_stock = (monthlyConsumption && monthlyConsumption > 0)
-        ? totalAvailable / monthlyConsumption
+      const months_of_stock = (target_stock && target_stock > 0)
+        ? totalAvailable / target_stock
         : null;
 
       return { ...item, atl_qty, target_stock, shipments, total_on_water, months_of_stock };
@@ -1908,15 +1904,26 @@ app.patch('/api/pk/inventory/:pkName/notes', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// PATCH monthly consumption for an item (used to compute Months of Stock)
-app.patch('/api/pk/inventory/:pkName/consumption', async (req, res) => {
-  const { monthly_consumption } = req.body;
+// PATCH "Monthly Consumption" (= proclean_items.target_stock) from the Pakistan tab.
+// Editable on the ProClean Inventory site's Pakistan tab; view-only on the Pakistan Production site.
+// Looked up via pk_inventory's proclean_name/pk_name -> proclean_items.name or sku (same matching used in GET /api/pk/inventory).
+app.patch('/api/pk/inventory/:pkName/atl-target', async (req, res) => {
+  const { target_stock } = req.body;
   try {
-    await pool.query(
-      'UPDATE pk_inventory SET monthly_consumption=$1, last_updated=NOW() WHERE pk_name=$2',
-      [monthly_consumption !== '' && monthly_consumption !== null ? parseFloat(monthly_consumption) : null, req.params.pkName]
+    const pkRes = await pool.query('SELECT pk_name, proclean_name FROM pk_inventory WHERE pk_name=$1', [req.params.pkName]);
+    if (!pkRes.rows.length) return res.status(404).json({ error: 'Pakistan item not found' });
+
+    const pkItem = pkRes.rows[0];
+    const lookupName = (pkItem.proclean_name || pkItem.pk_name).toUpperCase();
+    const val = target_stock !== '' && target_stock !== null ? parseFloat(target_stock) : null;
+
+    const result = await pool.query(
+      'UPDATE proclean_items SET target_stock=$1 WHERE UPPER(name)=$2 OR UPPER(sku)=$2 RETURNING qbo_id',
+      [val, lookupName]
     );
-    res.json({ ok: true });
+    if (!result.rows.length) return res.status(404).json({ error: `No matching ProClean item found for "${lookupName}"` });
+
+    res.json({ ok: true, qbo_id: result.rows[0].qbo_id });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1953,7 +1960,7 @@ app.get('/export/proclean', async (req, res) => {
              last_synced, last_updated_by
       FROM proclean_items WHERE item_type = 'Inventory' ORDER BY name ASC
     `);
-    const header = 'Item Name,SKU,UOM,Qty On Hand,Target Stock,Sale Price,Cost Price,Sale Value,Cost Value,Last Synced,Last Updated By\n';
+    const header = 'Item Name,SKU,UOM,Qty On Hand,Monthly Consumption,Sale Price,Cost Price,Sale Value,Cost Value,Last Synced,Last Updated By\n';
     const rows = result.rows.map(r => [
       `"${(r.name||'').replace(/"/g,'""')}"`,
       `"${(r.sku||'').replace(/"/g,'""')}"`,
@@ -1980,12 +1987,18 @@ app.get('/export/pakistan', async (req, res) => {
       pool.query('SELECT * FROM pk_inventory ORDER BY pk_name ASC'),
       pool.query('SELECT * FROM pk_shipments ORDER BY created_at ASC'),
       pool.query('SELECT * FROM pk_shipment_items'),
-      pool.query("SELECT name, sku, qty_on_hand FROM proclean_items WHERE item_type = 'Inventory'"),
+      pool.query("SELECT name, sku, qty_on_hand, target_stock FROM proclean_items WHERE item_type = 'Inventory'"),
     ]);
     const atlMap = {};
+    const atlTargetMap = {};
     for (const r of atlRes.rows) {
-      atlMap[r.name.toUpperCase()] = parseFloat(r.qty_on_hand) || 0;
-      if (r.sku) atlMap[r.sku.toUpperCase()] = parseFloat(r.qty_on_hand) || 0;
+      const key = r.name.toUpperCase();
+      atlMap[key] = parseFloat(r.qty_on_hand) || 0;
+      atlTargetMap[key] = r.target_stock != null ? parseFloat(r.target_stock) : null;
+      if (r.sku) {
+        atlMap[r.sku.toUpperCase()] = parseFloat(r.qty_on_hand) || 0;
+        atlTargetMap[r.sku.toUpperCase()] = r.target_stock != null ? parseFloat(r.target_stock) : null;
+      }
     }
     const shipItemMap = {};
     for (const si of shipmentItemsRes.rows) {
@@ -1997,13 +2010,13 @@ app.get('/export/pakistan', async (req, res) => {
     const rows = itemsRes.rows.map(item => {
       const lookupName = (item.proclean_name || item.pk_name).toUpperCase();
       const atl = atlMap[lookupName] ?? '';
+      const targetStock = atlTargetMap[lookupName] ?? null;
       const shipQtys = shipmentsRes.rows.map(s => shipItemMap[s.id]?.[item.pk_name] || 0);
       const totalOnWater = shipQtys.reduce((a, b) => a + b, 0);
-      const monthlyConsumption = item.monthly_consumption != null ? parseFloat(item.monthly_consumption) : null;
       const totalAvailable = (parseFloat(item.qty_in_pakistan) || 0) + totalOnWater + (typeof atl === 'number' ? atl : 0);
-      const monthsOfStock = (monthlyConsumption && monthlyConsumption > 0) ? (totalAvailable / monthlyConsumption).toFixed(1) : '';
+      const monthsOfStock = (targetStock && targetStock > 0) ? (totalAvailable / targetStock).toFixed(1) : '';
       return [`"${item.pk_name}"`, `"${item.proclean_name || ''}"`, item.uom, item.qty_in_pakistan || 0, ...shipQtys, totalOnWater, atl,
-        monthlyConsumption != null ? monthlyConsumption : '',
+        targetStock != null ? targetStock : '',
         monthsOfStock,
         `"${(item.notes || '').replace(/"/g, '""')}"`].join(',');
     }).join('\n');
