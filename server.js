@@ -2123,6 +2123,7 @@ async function getArData(companyKey) {
     invoicesByCustomer[key].push({
       docNumber: inv.DocNumber || inv.Id,
       txnDate: inv.TxnDate,
+      dueDate: inv.DueDate || null,
       balance: parseFloat(inv.Balance) || 0,
     });
   }
@@ -2152,6 +2153,11 @@ async function getArData(companyKey) {
     row.oldest_invoice_days = invoices.length
       ? Math.floor(Math.max(...invoices.map(inv => (now - new Date(inv.txnDate).getTime()) / MS_PER_DAY)))
       : null;
+  }
+
+  // Attach each customer's open invoices (for the per-invoice drill-down on the site)
+  for (const row of rows) {
+    row.invoices = invoicesByCustomer[row.name.toUpperCase()] || [];
   }
 
   const result = { companyName: company.name, asOf: report?.Header?.Time || null, rows };
@@ -2192,6 +2198,11 @@ async function getApData() {
       dueDate: bill.DueDate || null,
       balance: parseFloat(bill.Balance) || 0,
     });
+  }
+
+  // Attach each vendor's open bills (for the per-bill drill-down on the site)
+  for (const row of rows) {
+    row.bills = billsByVendor[row.name.toUpperCase()] || [];
   }
 
   const result = { companyName: company.name, asOf: report?.Header?.Time || null, rows, billsByVendor };
