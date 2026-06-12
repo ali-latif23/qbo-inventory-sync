@@ -119,6 +119,18 @@
     .ar-table tr:last-child td { border-bottom: none; }
     .ar-table tr:hover td { background: var(--surface2); }
 
+    .ar-table tr.expandable td:first-child { cursor: pointer; }
+    .expand-arrow { display: inline-block; margin-right: 8px; color: var(--text3); transition: transform 0.15s; font-size: 11px; }
+    .expand-arrow.open { transform: rotate(90deg); }
+    .detail-row td { padding: 0; background: var(--surface2); }
+    .detail-row.collapsed { display: none; }
+    .detail-inner { padding: 10px 14px 14px 38px; }
+    .detail-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
+    .detail-table th { text-align: left; padding: 5px 10px; color: var(--text3); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: 0.06em; font-family: var(--font); }
+    .detail-table td { padding: 5px 10px; color: var(--text2); }
+    .detail-table th:last-child, .detail-table td:last-child { text-align: right; }
+    .detail-table tr.invoice-overdue td { color: var(--red); font-weight: 600; }
+
     /* Overdue / no-terms row highlighting — background only on every cell, accent bar on first cell only */
     .ar-table tr.overdue-row td { background: #fee2e2 !important; }
     .ar-table tr.overdue-row:hover td { background: #fecaca !important; }
@@ -423,28 +435,57 @@ function renderAr(data, companyKey) {
     tbody.innerHTML = `<tr><td colspan="9"><div class="empty-state">No open receivables (or report format not recognized — raw response below)${raw}</div></td></tr>`;
     return;
   }
-  tbody.innerHTML = data.rows.map(r => {
+  tbody.innerHTML = data.rows.map((r, i) => {
     const rowClass = r.status === 'overdue' ? 'overdue-row' : r.status === 'no_terms' ? 'no-terms-row' : '';
     const badge = r.status === 'overdue' ? '<span class="status-badge status-overdue">Over Terms</span>'
       : r.status === 'no_terms' ? '<span class="status-badge status-no-terms">Terms Not Set</span>'
       : '<span class="status-badge status-ok">OK</span>';
     const termsVal = r.terms_days != null ? r.terms_days : '';
     const safe = r.name.replace(/[^a-zA-Z0-9]/g, '_');
-    return `<tr class="${rowClass}">
-      <td>${r.name}</td>
+    const rowId = `ar-${companyKey}-${i}`;
+    const termsDays = r.terms_days;
+
+    const invoiceRows = (r.invoices || []).slice().sort((a, b) => new Date(a.txnDate) - new Date(b.txnDate)).map(inv => {
+      const created = inv.txnDate ? new Date(inv.txnDate).toLocaleDateString('en-US') : '—';
+      const due = inv.dueDate ? new Date(inv.dueDate).toLocaleDateString('en-US') : '—';
+      const isOverdue = termsDays != null && inv.txnDate && ((Date.now() - new Date(inv.txnDate).getTime()) / 86400000) > termsDays;
+      return `<tr class="${isOverdue ? 'invoice-overdue' : ''}">
+        <td>${inv.docNumber}</td>
+        <td>${created}</td>
+        <td>${due}</td>
+        <td>${fmtMoney(inv.balance)}</td>
+      </tr>`;
+    }).join('');
+
+    const detailHtml = (r.invoices && r.invoices.length)
+      ? `<table class="detail-table"><thead><tr><th>Invoice #</th><th>Created</th><th>Due</th><th>Balance</th></tr></thead><tbody>${invoiceRows}</tbody></table>`
+      : `<div style="font-size:12px;color:var(--text3);padding:4px 10px">No open invoices</div>`;
+
+    return `<tr class="${rowClass} expandable" onclick="toggleArDetail('${rowId}')">
+      <td><span class="expand-arrow" id="arrow-${rowId}">&#9656;</span>${r.name}</td>
       <td>${fmtMoney(r.current)}</td>
       <td>${fmtMoney(r.d1_30)}</td>
       <td>${fmtMoney(r.d31_60)}</td>
       <td>${fmtMoney(r.d61_90)}</td>
       <td>${fmtMoney(r.d91_plus)}</td>
       <td style="font-weight:700">${fmtMoney(r.total)}</td>
-      <td style="text-align:center">
+      <td style="text-align:center" onclick="event.stopPropagation()">
         <input class="terms-input" type="number" min="0" step="1" placeholder="Set" value="${termsVal}"
                oninput="debounceTerms('${companyKey}','${safe}',()=>saveTerms('${companyKey}','${r.name.replace(/'/g, "\\'")}',this.value,this))" />
       </td>
       <td style="text-align:center">${badge}</td>
+    </tr>
+    <tr class="detail-row collapsed" id="detail-${rowId}">
+      <td colspan="9"><div class="detail-inner">${detailHtml}</div></td>
     </tr>`;
   }).join('');
+}
+
+function toggleArDetail(rowId) {
+  const detail = document.getElementById('detail-' + rowId);
+  const arrow = document.getElementById('arrow-' + rowId);
+  detail.classList.toggle('collapsed');
+  arrow.classList.toggle('open');
 }
 
 const termsDebounceTimers = {};
@@ -486,16 +527,36 @@ async function loadAp() {
       tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state">No open payables (or report format not recognized — raw response below)${raw}</div></td></tr>`;
       return;
     }
-    tbody.innerHTML = data.rows.map(r => `<tr>
-      <td>${r.name}</td>
-      <td>${fmtMoney(r.current)}</td>
-      <td>${fmtMoney(r.d1_30)}</td>
-      <td>${fmtMoney(r.d31_60)}</td>
-      <td>${fmtMoney(r.d61_90)}</td>
-      <td>${fmtMoney(r.d91_plus)}</td>
-      <td style="font-weight:700">${fmtMoney(r.total)}</td>
-      <td style="text-align:center"><button class="btn-send" onclick="openPiModal('${r.name.replace(/'/g, "\\'")}', ${r.total})">Send Payment Instruction</button></td>
-    </tr>`).join('');
+    tbody.innerHTML = data.rows.map((r, i) => {
+      const rowId = `ap-${i}`;
+      const billRows = (r.bills || []).slice().sort((a, b) => new Date(a.txnDate) - new Date(b.txnDate)).map(b => {
+        const created = b.txnDate ? new Date(b.txnDate).toLocaleDateString('en-US') : '—';
+        const due = b.dueDate ? new Date(b.dueDate).toLocaleDateString('en-US') : '—';
+        return `<tr>
+          <td>${b.docNumber}</td>
+          <td>${created}</td>
+          <td>${due}</td>
+          <td>${fmtMoney(b.balance)}</td>
+        </tr>`;
+      }).join('');
+      const detailHtml = (r.bills && r.bills.length)
+        ? `<table class="detail-table"><thead><tr><th>Bill #</th><th>Created</th><th>Due</th><th>Balance</th></tr></thead><tbody>${billRows}</tbody></table>`
+        : `<div style="font-size:12px;color:var(--text3);padding:4px 10px">No open bills</div>`;
+
+      return `<tr class="expandable" onclick="toggleArDetail('${rowId}')">
+        <td><span class="expand-arrow" id="arrow-${rowId}">&#9656;</span>${r.name}</td>
+        <td>${fmtMoney(r.current)}</td>
+        <td>${fmtMoney(r.d1_30)}</td>
+        <td>${fmtMoney(r.d31_60)}</td>
+        <td>${fmtMoney(r.d61_90)}</td>
+        <td>${fmtMoney(r.d91_plus)}</td>
+        <td style="font-weight:700">${fmtMoney(r.total)}</td>
+        <td style="text-align:center" onclick="event.stopPropagation()"><button class="btn-send" onclick="openPiModal('${r.name.replace(/'/g, "\\'")}', ${r.total})">Send Payment Instruction</button></td>
+      </tr>
+      <tr class="detail-row collapsed" id="detail-${rowId}">
+        <td colspan="8"><div class="detail-inner">${detailHtml}</div></td>
+      </tr>`;
+    }).join('');
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state">Error: ${e.message}</div></td></tr>`;
   }
