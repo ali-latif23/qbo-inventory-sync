@@ -191,6 +191,9 @@
     .pk-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
     .btn-dark { display: flex; align-items: center; gap: 7px; background: #2d2d2d; color: white; border: none; border-radius: var(--radius); padding: 8px 14px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: var(--font); transition: background 0.15s; }
     .btn-dark:hover { background: #1a1a1a; }
+    .btn-outline { display: flex; align-items: center; gap: 7px; background: var(--surface); color: var(--text2); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 14px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: var(--font); transition: all 0.15s; }
+    .btn-outline:hover { border-color: var(--border2); color: var(--text); }
+    .pk-table th.container-col-hidden, .pk-table td.container-col-hidden { display: none; }
     .btn-outline { display: flex; align-items: center; gap: 6px; background: white; color: var(--text2); border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 12px; font-size: 12px; font-weight: 500; cursor: pointer; font-family: var(--font); transition: all 0.15s; }
     .btn-outline:hover { border-color: #888; color: var(--text); }
     .btn-red { background: var(--red-dim); color: var(--red); border: 1px solid rgba(229,62,62,0.3); border-radius: var(--radius); padding: 5px 10px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: var(--font); transition: all 0.15s; white-space: nowrap; }
@@ -227,8 +230,9 @@
     .form-input-pk:focus { border-color: #555; }
 
     /* Low stock alert row — fires when Months of Stock < 3. More prominent than the old hot-row highlight. */
-    .pk-table tr.low-stock-row td { background: #fee2e2 !important; box-shadow: inset 4px 0 0 0 var(--red); }
+    .pk-table tr.low-stock-row td { background: #fee2e2 !important; }
     .pk-table tr.low-stock-row:hover td { background: #fecaca !important; }
+    .pk-table tr.low-stock-row td:first-child { box-shadow: inset 4px 0 0 0 var(--red); }
     .months-stock-badge { font-family: var(--mono); font-size: 13px; font-weight: 700; padding: 3px 8px; border-radius: 6px; }
     .months-stock-low { background: var(--red); color: white; }
     .months-stock-ok { color: var(--text2); }
@@ -498,7 +502,10 @@
       </div>
       <div class="pk-toolbar">
         <div style="font-size:12px;color:var(--text3)">Click any quantity to edit · Changes save automatically · ATL column is read-only</div>
-        <button class="btn-dark" onclick="showAddShipment()" id="add-shipment-btn">+ Add Shipment</button>
+        <div style="display:flex;gap:10px;align-items:center">
+          <button class="btn-outline" onclick="toggleContainerColumns()" id="toggle-containers-btn">Hide Containers</button>
+          <button class="btn-dark" onclick="showAddShipment()" id="add-shipment-btn">+ Add Shipment</button>
+        </div>
       </div>
       <div id="pk-content"><div class="loading"><div class="spinner"></div> Loading…</div></div>
     </div>
@@ -893,6 +900,7 @@ async function renderMonthlySummary() {
 
 // ── Pakistan Stock ───────────────────────────────────────────────────────────
 let pkData = null;
+let containersHidden = false;
 
 
 async function renderPakistanStock() {
@@ -936,7 +944,7 @@ function buildPkTable(data) {
   html += '<th style="min-width:90px;text-align:center">Qty in Pakistan</th>';
   shipments.forEach(s => {
     const eta = s.eta ? new Date(s.eta).toLocaleDateString('en-US', {month:'short',day:'numeric',year:'numeric'}) : 'TBD';
-    html += `<th class="shipment-header" style="min-width:100px">${s.name}<span class="shipment-eta">ETA: ${eta}</span></th>`;
+    html += `<th class="shipment-header container-col" style="min-width:100px">${s.name}<span class="shipment-eta">ETA: ${eta}</span></th>`;
   });
   html += '<th style="min-width:80px;text-align:center;background:#f7f7f7">Total On Water</th>';
   html += '<th style="min-width:80px;text-align:center;background:#ebf8ff;color:#2c5282">ATL Qty</th>';
@@ -950,7 +958,7 @@ function buildPkTable(data) {
     html += '<tr>';
     html += '<td colspan="3" style="border-bottom:1px solid var(--border);background:#fafafa;font-size:11px;color:var(--text3);padding:6px 12px">Zero out when container arrives:</td>';
     shipments.forEach(s => {
-      html += `<td class="zero-btn-wrap"><button class="btn-red" onclick="zeroOutShipment(${s.id},'${s.name}')">Zero Out & Remove</button></td>`;
+      html += `<td class="zero-btn-wrap container-col"><button class="btn-red" onclick="zeroOutShipment(${s.id},'${s.name}')">Zero Out & Remove</button></td>`;
     });
     html += '<td style="border-bottom:1px solid var(--border);background:#f7f7f7"></td>';
     html += '<td style="border-bottom:1px solid var(--border);background:#ebf8ff"></td>';
@@ -974,7 +982,7 @@ function buildPkTable(data) {
 
     // Shipment columns
     item.shipments.forEach(s => {
-      html += `<td class="shipment-col pk-qty-cell"><input class="pk-input" type="number" value="${s.qty||0}" oninput="debounce('ship_${s.shipment_id}_${safe}',()=>saveShipmentQty(${s.shipment_id},'${item.pk_name}',this.value),2000)" /></td>`;
+      html += `<td class="shipment-col container-col pk-qty-cell"><input class="pk-input" type="number" value="${s.qty||0}" oninput="debounce('ship_${s.shipment_id}_${safe}',()=>saveShipmentQty(${s.shipment_id},'${item.pk_name}',this.value),2000)" /></td>`;
     });
 
     // Total on water
@@ -1014,6 +1022,20 @@ function buildPkTable(data) {
 
   html += '</tbody></table></div>';
   el.innerHTML = html;
+  applyContainerVisibility();
+}
+
+function applyContainerVisibility() {
+  document.querySelectorAll('.pk-table .container-col').forEach(elc => {
+    elc.classList.toggle('container-col-hidden', containersHidden);
+  });
+  const btn = document.getElementById('toggle-containers-btn');
+  if (btn) btn.textContent = containersHidden ? 'Show Containers' : 'Hide Containers';
+}
+
+function toggleContainerColumns() {
+  containersHidden = !containersHidden;
+  applyContainerVisibility();
 }
 
 // ── Debounce helper ──────────────────────────────────────────────────────────
