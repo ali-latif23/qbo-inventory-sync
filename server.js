@@ -71,6 +71,7 @@ async function initDb() {
     ALTER TABLE pk_inventory ADD COLUMN IF NOT EXISTS target_stock NUMERIC;
     ALTER TABLE pk_inventory ADD COLUMN IF NOT EXISTS notes TEXT;
     ALTER TABLE pk_inventory ADD COLUMN IF NOT EXISTS is_hot BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE pk_inventory ADD COLUMN IF NOT EXISTS monthly_consumption NUMERIC;
     CREATE TABLE IF NOT EXISTS pk_shipments (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
@@ -1525,8 +1526,9 @@ app.post('/api/pk/bulk-preview', async (req, res) => {
       const fc = { pk_name: item.pk_name, fields: [] };
       if (row.qty_in_pakistan!==undefined&&row.qty_in_pakistan!==''&&parseFloat(row.qty_in_pakistan)!==parseFloat(item.qty_in_pakistan)) fc.fields.push({ field:'qty_in_pakistan', label:'Qty in Pakistan', current:parseFloat(item.qty_in_pakistan), new:parseFloat(row.qty_in_pakistan) });
       // target_stock intentionally excluded — it is now sourced read-only from proclean_items.target_stock
+      if (row.monthly_consumption!==undefined&&row.monthly_consumption!==''&&parseFloat(row.monthly_consumption)!==parseFloat(item.monthly_consumption||0)) fc.fields.push({ field:'monthly_consumption', label:'Monthly Consumption', current:item.monthly_consumption, new:parseFloat(row.monthly_consumption) });
       if (row.notes!==undefined&&row.notes!==(item.notes||'')) fc.fields.push({ field:'notes', label:'Notes', current:item.notes||'', new:row.notes });
-      if (row.is_hot!==undefined) { const nh=row.is_hot==='YES'||row.is_hot===true; if(nh!==item.is_hot) fc.fields.push({ field:'is_hot', label:'Hot Item', current:item.is_hot, new:nh }); }
+      // is_hot intentionally removed — Hot toggle feature retired
       for (const ship of shipRes.rows) {
         const ck='shipment_'+ship.name;
         if (row[ck]!==undefined&&row[ck]!=='') {
@@ -1550,8 +1552,8 @@ app.post('/api/pk/bulk-apply', async (req, res) => {
       for (const f of change.fields) {
         if (f.field==='qty_in_pakistan') await pool.query('UPDATE pk_inventory SET qty_in_pakistan=$1,last_updated=NOW() WHERE pk_name=$2',[f.new,change.pk_name]);
         // target_stock case removed — now sourced read-only from proclean_items
+        else if (f.field==='monthly_consumption') await pool.query('UPDATE pk_inventory SET monthly_consumption=$1,last_updated=NOW() WHERE pk_name=$2',[f.new,change.pk_name]);
         else if (f.field==='notes') await pool.query('UPDATE pk_inventory SET notes=$1,last_updated=NOW() WHERE pk_name=$2',[f.new||null,change.pk_name]);
-        else if (f.field==='is_hot') await pool.query('UPDATE pk_inventory SET is_hot=$1,last_updated=NOW() WHERE pk_name=$2',[f.new,change.pk_name]);
         else if (f.field.startsWith('shipment_')) await pool.query('INSERT INTO pk_shipment_items (shipment_id,pk_name,quantity) VALUES ($1,$2,$3) ON CONFLICT (shipment_id,pk_name) DO UPDATE SET quantity=$3',[f.shipment_id,change.pk_name,f.new]);
       }
       results.success++;
@@ -1836,7 +1838,15 @@ app.get('/api/pk/inventory', async (req, res) => {
         qty: shipItemMap[s.id]?.[item.pk_name] || 0
       }));
       const total_on_water = shipments.reduce((sum, s) => sum + s.qty, 0);
-      return { ...item, atl_qty, target_stock, shipments, total_on_water };
+
+      // Months of Stock = (Pakistan qty + total on water + ATL qty) / monthly consumption
+      const monthlyConsumption = item.monthly_consumption != null ? parseFloat(item.monthly_consumption) : null;
+      const totalAvailable = (parseFloat(item.qty_in_pakistan) || 0) + total_on_water + (atl_qty || 0);
+      const months_of_stock = (monthlyConsumption && monthlyConsumption > 0)
+        ? totalAvailable / monthlyConsumption
+        : null;
+
+      return { ...item, atl_qty, target_stock, shipments, total_on_water, months_of_stock };
     });
 
     res.json({ items, shipments: shipmentsRes.rows });
@@ -1898,25 +1908,13 @@ app.patch('/api/pk/inventory/:pkName/notes', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// PATCH target stock for an item
-app.patch('/api/pk/inventory/:pkName/target', async (req, res) => {
-  const { target_stock } = req.body;
+// PATCH monthly consumption for an item (used to compute Months of Stock)
+app.patch('/api/pk/inventory/:pkName/consumption', async (req, res) => {
+  const { monthly_consumption } = req.body;
   try {
     await pool.query(
-      'UPDATE pk_inventory SET target_stock=$1, last_updated=NOW() WHERE pk_name=$2',
-      [target_stock !== '' && target_stock !== null ? parseFloat(target_stock) : null, req.params.pkName]
-    );
-    res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// PATCH hot status for an item
-app.patch('/api/pk/inventory/:pkName/hot', async (req, res) => {
-  const { is_hot } = req.body;
-  try {
-    await pool.query(
-      'UPDATE pk_inventory SET is_hot=$1, last_updated=NOW() WHERE pk_name=$2',
-      [!!is_hot, req.params.pkName]
+      'UPDATE pk_inventory SET monthly_consumption=$1, last_updated=NOW() WHERE pk_name=$2',
+      [monthly_consumption !== '' && monthly_consumption !== null ? parseFloat(monthly_consumption) : null, req.params.pkName]
     );
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1995,15 +1993,19 @@ app.get('/export/pakistan', async (req, res) => {
       shipItemMap[si.shipment_id][si.pk_name] = parseFloat(si.quantity) || 0;
     }
     const shipHeaders = shipmentsRes.rows.map(s => `"${s.name} (ETA: ${s.eta ? new Date(s.eta).toLocaleDateString('en-US') : 'TBD'})"`).join(',');
-    const header = `Item Name,ProClean Name,UOM,Qty in Pakistan,${shipHeaders},Total On Water,Atlanta (ATL) Qty,Target ATL Stock,Hot Item,Notes\n`;
+    const header = `Item Name,ProClean Name,UOM,Qty in Pakistan,${shipHeaders},Total On Water,Atlanta (ATL) Qty,Monthly Consumption,Months of Stock,Notes\n`;
     const rows = itemsRes.rows.map(item => {
       const lookupName = (item.proclean_name || item.pk_name).toUpperCase();
       const atl = atlMap[lookupName] ?? '';
       const shipQtys = shipmentsRes.rows.map(s => shipItemMap[s.id]?.[item.pk_name] || 0);
       const totalOnWater = shipQtys.reduce((a, b) => a + b, 0);
+      const monthlyConsumption = item.monthly_consumption != null ? parseFloat(item.monthly_consumption) : null;
+      const totalAvailable = (parseFloat(item.qty_in_pakistan) || 0) + totalOnWater + (typeof atl === 'number' ? atl : 0);
+      const monthsOfStock = (monthlyConsumption && monthlyConsumption > 0) ? (totalAvailable / monthlyConsumption).toFixed(1) : '';
       return [`"${item.pk_name}"`, `"${item.proclean_name || ''}"`, item.uom, item.qty_in_pakistan || 0, ...shipQtys, totalOnWater, atl,
-        item.target_stock !== null && item.target_stock !== undefined ? item.target_stock : '',
-        item.is_hot ? 'YES' : '', `"${(item.notes || '').replace(/"/g, '""')}"`].join(',');
+        monthlyConsumption != null ? monthlyConsumption : '',
+        monthsOfStock,
+        `"${(item.notes || '').replace(/"/g, '""')}"`].join(',');
     }).join('\n');
     const date = new Date().toISOString().split('T')[0];
     res.setHeader('Content-Type', 'text/csv');
