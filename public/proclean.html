@@ -484,7 +484,11 @@
     .pk-table td{padding:8px 12px;border-bottom:1px solid var(--border);font-size:13px;vertical-align:middle;}
     .pk-table tr:last-child td{border-bottom:none;}
     .pk-table tr:hover td{background:var(--blue-light);}
-    .pk-table tr.hot-row td{background:#fffbeb!important;}
+    .pk-table tr.low-stock-row td{background:#fee2e2!important;box-shadow:inset 4px 0 0 0 var(--red);}
+    .pk-table tr.low-stock-row:hover td{background:#fecaca!important;}
+    .months-stock-badge{font-family:var(--mono);font-size:13px;font-weight:700;padding:3px 8px;border-radius:6px;}
+    .months-stock-low{background:var(--red);color:white;}
+    .months-stock-ok{color:var(--text2);}
     .pk-name{font-weight:600;color:var(--text);} .pk-alias{font-size:10px;color:var(--text3);font-family:var(--mono);display:block;margin-top:1px;}
     .pk-qty-cell{text-align:center;} .pk-uom{font-family:var(--mono);font-size:10px;color:var(--text3);}
     .pk-input{width:72px;text-align:center;background:var(--surface2);border:1px solid var(--border);border-radius:5px;padding:4px 6px;font-size:12px;font-family:var(--mono);color:var(--text);outline:none;}
@@ -494,8 +498,6 @@
     .shipment-col{text-align:center;background:rgba(44,82,130,.03);}
     .btn-red-sm{background:var(--red-dim);color:var(--red);border:1px solid rgba(229,62,62,.3);border-radius:var(--radius);padding:4px 8px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--font);}
     .btn-red-sm:hover{background:var(--red);color:white;}
-    .hot-btn{border:none;border-radius:5px;padding:4px 8px;font-size:11px;font-weight:700;cursor:pointer;font-family:var(--font);}
-    .hot-btn.active{background:#f59e0b;color:white;} .hot-btn.inactive{background:var(--surface2);color:var(--text3);border:1px solid var(--border);}
     .notes-input-pk{width:100%;min-width:130px;background:var(--surface2);border:1px solid var(--border);border-radius:5px;padding:4px 6px;font-size:11px;color:var(--text);outline:none;font-family:var(--font);resize:none;height:30px;}
     .notes-input-pk:focus{border-color:var(--blue);background:white;height:56px;}
     .notify-btn-pc{border:none;border-radius:4px;padding:3px 7px;font-size:10px;font-weight:700;cursor:pointer;font-family:var(--font);white-space:nowrap;margin-top:3px;}
@@ -1585,11 +1587,11 @@ function buildPcPkTable(data){
   let h='<div class="pk-table-wrap"><table class="pk-table"><thead><tr>';
   h+='<th style="min-width:140px">Item</th><th style="min-width:50px">UOM</th><th style="min-width:90px;text-align:center">Qty in Pakistan</th>';
   shipments.forEach(s=>{const eta=s.eta?new Date(s.eta).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'TBD';h+=`<th class="shipment-header" style="min-width:100px">${s.name}<span class="shipment-eta">ETA: ${eta}</span></th>`;});
-  h+='<th style="min-width:80px;text-align:center;background:#f7f7f7">On Water</th><th style="min-width:80px;text-align:center;background:#ebf8ff;color:#2c5282">ATL Qty</th><th style="min-width:90px;text-align:center;background:#f0fff4;color:#276749">Target ATL</th><th style="min-width:70px;text-align:center;background:#92400e;color:white">Hot</th><th style="min-width:180px">Notes</th></tr>';
+  h+='<th style="min-width:80px;text-align:center;background:#f7f7f7">On Water</th><th style="min-width:80px;text-align:center;background:#ebf8ff;color:#2c5282">ATL Qty</th><th style="min-width:110px;text-align:center;background:#f0fff4;color:#276749">Monthly Consumption</th><th style="min-width:100px;text-align:center;background:#fef2f2;color:#991b1b">Months of Stock</th><th style="min-width:180px">Notes</th></tr>';
   if(shipments.length>0){h+='<tr><td colspan="3" style="border-bottom:1px solid var(--border);background:#fafafa;font-size:11px;color:var(--text3);padding:6px 12px">Zero out when container arrives:</td>';shipments.forEach(s=>{h+=`<td style="text-align:center;padding:6px;border-bottom:1px solid var(--border)"><button class="btn-red-sm" onclick="pcZeroOut(${s.id},'${s.name}')">Zero Out</button></td>`;});h+='<td style="border-bottom:1px solid var(--border)"></td><td style="border-bottom:1px solid var(--border)"></td><td style="border-bottom:1px solid var(--border)"></td><td style="border-bottom:1px solid var(--border)"></td><td style="border-bottom:1px solid var(--border)"></td></tr>';}
   h+='</thead><tbody>';
   items.forEach(item=>{
-    const s=sf(item.pk_name),hc=item.is_hot?'hot-row':'';
+    const s=sf(item.pk_name),hc=(item.months_of_stock!==null&&item.months_of_stock!==undefined&&item.months_of_stock<3)?'low-stock-row':'';
     h+=`<tr class="${hc}"><td><span class="pk-name">${item.pk_name}</span>${item.proclean_name?`<span class="pk-alias">${item.proclean_name}</span>`:''}</td><td><span class="pk-uom">${item.uom}</span></td>`;
     h+=`<td class="pk-qty-cell"><input class="pk-input" type="number" value="${item.qty_in_pakistan||0}" oninput="pcDb('pkq_${s}',()=>pcSaveQty('${item.pk_name}',this.value))" /></td>`;
     item.shipments.forEach(sh=>{h+=`<td class="shipment-col pk-qty-cell"><input class="pk-input" type="number" value="${sh.qty||0}" oninput="pcDb('shq_${sh.shipment_id}_${s}',()=>pcSaveShipQty(${sh.shipment_id},'${item.pk_name}',this.value))" /></td>`;});
@@ -1597,11 +1599,16 @@ function buildPcPkTable(data){
     h+=`<td style="background:#f7f7f7"><span class="pk-total" style="color:${tc}">${item.total_on_water}</span></td>`;
     const ac=getAtlColorPC(item.atl_qty,item.target_stock),bt=item.pk_name==='1616B'?'<span class="bale-tag">BALE</span>':'';
     h+=`<td style="background:#ebf8ff"><span class="pk-atl" style="color:${ac}">${item.atl_qty!==null?item.atl_qty:'--'}</span>${bt}</td>`;
-    // target_stock is now sourced from proclean_items via API — read-only here
-    const tv=item.target_stock!==null&&item.target_stock!==undefined?item.target_stock:'—';
-    h+=`<td style="background:#f0fff4;text-align:center"><span style="font-family:var(--mono);font-size:13px;font-weight:600;color:var(--text2)">${tv}</span></td>`;
-    const hbtn=item.is_hot?'active':'inactive';
-    h+=`<td style="text-align:center"><button class="hot-btn ${hbtn}" onclick="pcToggleHot('${item.pk_name}',this)">${item.is_hot?'Hot':'Mark Hot'}</button></td>`;
+    // Monthly Consumption — editable, drives the Months of Stock calculation
+    const cv=item.monthly_consumption!==null&&item.monthly_consumption!==undefined?item.monthly_consumption:'';
+    h+=`<td style="background:#f0fff4"><input class="pk-input" type="number" min="0" step="1" value="${cv}" placeholder="--" oninput="pcDb('cons_${s}',()=>pcSaveConsumption('${item.pk_name}',this.value))" /></td>`;
+    // Months of Stock = (Pakistan qty + total on water + ATL qty) / Monthly Consumption
+    if(item.months_of_stock!==null&&item.months_of_stock!==undefined){
+      const mos=item.months_of_stock,mosClass=mos<3?'months-stock-badge months-stock-low':'months-stock-badge months-stock-ok';
+      h+=`<td style="background:#fef2f2;text-align:center"><span class="${mosClass}">${mos.toFixed(1)}</span></td>`;
+    } else {
+      h+=`<td style="background:#fef2f2;text-align:center"><span style="color:var(--text3);font-size:13px">—</span></td>`;
+    }
     h+=`<td><div><textarea class="notes-input-pk" id="pcnotes_${s}" oninput="pcDb('pnt_${s}',()=>pcSaveNotes('${item.pk_name}',this.value))">${item.notes||''}</textarea><div style="display:none;gap:4px;margin-top:3px" id="pcnotify_${s}"><button class="notify-btn-pc notify-nihad-pc" onclick="pcNotify('nihad','${item.pk_name}','pcnotes_${s}',this)">Notify Nihad</button> <button class="notify-btn-pc notify-mateen-pc" onclick="pcNotify('mateen','${item.pk_name}','pcnotes_${s}',this)">Notify Mateen</button></div></div></td></tr>`;
   });
   h+='</tbody></table></div>';
@@ -1611,13 +1618,13 @@ function buildPcPkTable(data){
 async function pcSaveQty(n,v){try{await apiFetch('/api/pk/inventory/'+encodeURIComponent(n),{method:'PATCH',body:JSON.stringify({qty_in_pakistan:parseFloat(v)||0})});}catch(e){}}
 async function pcSaveShipQty(id,n,v){try{await apiFetch('/api/pk/shipments/'+id+'/items/'+encodeURIComponent(n),{method:'PATCH',body:JSON.stringify({quantity:parseFloat(v)||0})});}catch(e){}}
 async function pcSaveNotes(n,v){try{await apiFetch('/api/pk/inventory/'+encodeURIComponent(n)+'/notes',{method:'PATCH',body:JSON.stringify({notes:v||null})});}catch(e){}}
-async function pcToggleHot(n,btn){const isHot=btn.classList.contains('inactive');btn.classList.toggle('active',isHot);btn.classList.toggle('inactive',!isHot);btn.textContent=isHot?'Hot':'Mark Hot';const row=btn.closest('tr');if(isHot)row.classList.add('hot-row');else row.classList.remove('hot-row');try{await apiFetch('/api/pk/inventory/'+encodeURIComponent(n)+'/hot',{method:'PATCH',body:JSON.stringify({is_hot:isHot})});}catch(e){}}
+async function pcSaveConsumption(n,v){try{await apiFetch('/api/pk/inventory/'+encodeURIComponent(n)+'/consumption',{method:'PATCH',body:JSON.stringify({monthly_consumption:v===''?null:parseFloat(v)})});loadPkInventoryPC();}catch(e){}}
 async function pcZeroOut(id,name){if(!confirm('Zero out and remove "'+name+'"?'))return;try{await apiFetch('/api/pk/shipments/'+id+'/zero-out',{method:'POST'});loadPkInventoryPC();}catch(e){alert('Error: '+e.message);}}
 async function pcNotify(recipient,itemName,notesId,btn){const note=document.getElementById(notesId)?.value?.trim();if(!note){alert('Write a note first.');return;}btn.textContent='Sending...';btn.disabled=true;try{await apiFetch('/api/pk/notify',{method:'POST',body:JSON.stringify({recipient,note,item_name:itemName})});btn.textContent='Sent!';setTimeout(()=>{btn.textContent=recipient==='nihad'?'Notify Nihad':'Notify Mateen';btn.disabled=false;},3000);}catch(e){btn.textContent='Failed';setTimeout(()=>{btn.disabled=false;},3000);}}
 function showAddShipmentPC(){document.getElementById('add-shipment-modal-pc').style.display='flex';document.getElementById('pc-new-ship-name').value='';document.getElementById('pc-new-ship-eta').value='';document.getElementById('pc-add-ship-error').style.display='none';}
 function hideAddShipmentPC(){document.getElementById('add-shipment-modal-pc').style.display='none';}
 async function addShipmentPC(){const name=document.getElementById('pc-new-ship-name').value.trim(),eta=document.getElementById('pc-new-ship-eta').value,errEl=document.getElementById('pc-add-ship-error');if(!name){errEl.textContent='Name required';errEl.style.display='block';return;}try{const res=await apiFetch('/api/pk/shipments',{method:'POST',body:JSON.stringify({name,eta:eta||null})});if(!res.id){errEl.textContent=res.error||'Error';errEl.style.display='block';return;}hideAddShipmentPC();loadPkInventoryPC();}catch(e){errEl.textContent=e.message;errEl.style.display='block';}}
-async function handlePkUploadPC(event){const file=event.target.files[0];if(!file)return;const text=await file.text();const rows=parseCsv(text).map(r=>({pk_name:r.item_name||r.pk_name||'',qty_in_pakistan:r.qty_in_pakistan!==''?r.qty_in_pakistan:undefined,target_stock:r.target_atl_stock!==''?r.target_atl_stock:undefined,notes:r.notes!==''?r.notes:undefined,is_hot:r.hot_item!==''?r.hot_item:undefined}));event.target.value='';try{const res=await apiFetch('/api/pk/bulk-preview',{method:'POST',body:JSON.stringify({rows})});showBulkModal(res.changes,'pakistan');}catch(e){alert('Error: '+e.message);}}
+async function handlePkUploadPC(event){const file=event.target.files[0];if(!file)return;const text=await file.text();const rows=parseCsv(text).map(r=>({pk_name:r.item_name||r.pk_name||'',qty_in_pakistan:r.qty_in_pakistan!==''?r.qty_in_pakistan:undefined,monthly_consumption:r.monthly_consumption!==''?r.monthly_consumption:undefined,notes:r.notes!==''?r.notes:undefined}));event.target.value='';try{const res=await apiFetch('/api/pk/bulk-preview',{method:'POST',body:JSON.stringify({rows})});showBulkModal(res.changes,'pakistan');}catch(e){alert('Error: '+e.message);}}
 
 // Bulk Upload
 let pendingBulkChanges=[];
