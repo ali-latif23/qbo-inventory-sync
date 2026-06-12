@@ -414,6 +414,10 @@ async function loadAr(companyKey) {
 
 function renderAr(data, companyKey) {
   const tbody = document.getElementById('ar-body');
+  if (data.error) {
+    tbody.innerHTML = `<tr><td colspan="9"><div class="empty-state">${data.error}</div></td></tr>`;
+    return;
+  }
   if (!data.rows.length) {
     tbody.innerHTML = '<tr><td colspan="9"><div class="empty-state">No open receivables</div></td></tr>';
     return;
@@ -472,6 +476,10 @@ async function loadAp() {
     const data = await apiFetch('/api/ap/company1');
     apDataCache = data;
     document.getElementById('ap-sub').textContent = `Aged Payables — ${data.companyName}` + (data.asOf ? ` · as of ${new Date(data.asOf).toLocaleString('en-US')}` : '');
+    if (data.error) {
+      tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state">${data.error}</div></td></tr>`;
+      return;
+    }
     if (!data.rows.length) {
       tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state">No open payables</div></td></tr>';
       return;
@@ -569,6 +577,10 @@ async function loadDashboard() {
     let breakdownHtml = '';
 
     for (const { key, data } of arResults) {
+      if (data.error) {
+        breakdownHtml += `<tr><td>${data.companyName}</td><td colspan="3" style="color:var(--red)">${data.error}</td></tr>`;
+        continue;
+      }
       const companyTotal = data.rows.reduce((s, r) => s + r.total, 0);
       const overdueCount = data.rows.filter(r => r.status === 'overdue').length;
       const noTermsCount = data.rows.filter(r => r.status === 'no_terms').length;
