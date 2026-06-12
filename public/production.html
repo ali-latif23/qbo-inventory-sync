@@ -987,9 +987,9 @@ function buildPkTable(data) {
     const baleTag = item.pk_name === '1616B' ? '<span class="bale-tag">BALE</span>' : '';
     html += `<td style="background:#ebf8ff"><span class="pk-atl" style="color:${atlColor}">${atlQty}</span>${baleTag}</td>`;
 
-    // Monthly Consumption — editable, drives the Months of Stock calculation
-    const consumptionVal = item.monthly_consumption !== null && item.monthly_consumption !== undefined ? item.monthly_consumption : '';
-    html += `<td style="background:#f0fff4"><input class="pk-input" type="number" min="0" step="1" value="${consumptionVal}" placeholder="—" oninput="debounce('consumption_${safe}',()=>savePkConsumption('${item.pk_name}',this.value),2000)" /></td>`;
+    // Monthly Consumption (= proclean_items.target_stock) — view only here, editable on the ProClean site's Pakistan tab
+    const consumptionVal = item.target_stock !== null && item.target_stock !== undefined ? item.target_stock : '—';
+    html += `<td style="background:#f0fff4;text-align:center"><span style="font-family:var(--mono);font-size:13px;font-weight:600;color:var(--text2)">${consumptionVal}</span></td>`;
 
     // Months of Stock = (Pakistan qty + total on water + ATL qty) / Monthly Consumption
     if (item.months_of_stock !== null && item.months_of_stock !== undefined) {
@@ -1051,18 +1051,6 @@ async function savePkNotes(pkName, value) {
       body: JSON.stringify({ notes: value || null })
     });
   } catch(e) { console.error('Save notes error:', e); }
-}
-
-async function savePkConsumption(pkName, value) {
-  try {
-    await fetch(API + '/api/pk/inventory/' + encodeURIComponent(pkName) + '/consumption', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ monthly_consumption: value === '' ? null : parseFloat(value) })
-    });
-    // Months of Stock depends on this value — reload to recompute and re-flag low-stock rows
-    renderPakistanStock();
-  } catch(e) { console.error('Save consumption error:', e); }
 }
 
 async function zeroOutShipment(id, name) {
@@ -1165,13 +1153,12 @@ async function sendNotify(recipient, itemName, notesFieldId, btn) {
         </tr></thead>
         <tbody>
           <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Qty in Pakistan</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the quantity currently in Pakistan warehouse</td></tr>
-          <tr style="background:#f9f9f9"><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Monthly Consumption</td><td style="padding:7px 10px;border:1px solid var(--border)">Sets the average monthly consumption used to calculate Months of Stock</td></tr>
-          <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Shipment columns</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates qty for each active shipment on water — column header shows shipment name and ETA</td></tr>
-          <tr style="background:#f9f9f9"><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Notes</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the notes field for that item</td></tr>
+          <tr style="background:#f9f9f9"><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Shipment columns</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates qty for each active shipment on water — column header shows shipment name and ETA</td></tr>
+          <tr><td style="padding:7px 10px;border:1px solid var(--border);font-family:var(--mono)">Notes</td><td style="padding:7px 10px;border:1px solid var(--border)">Updates the notes field for that item</td></tr>
         </tbody>
       </table>
       <div style="background:#fffbeb;border:1px solid #f6ad55;border-radius:8px;padding:12px 16px;margin-bottom:16px;color:#744210;font-size:12px;">
-        <strong>Important:</strong> Only rows with changed values will be updated. You will see a preview of all detected changes before anything is saved — review carefully before confirming. The ATL Qty, Target Stock, and Months of Stock columns are read-only and cannot be changed via upload.
+        <strong>Important:</strong> Only rows with changed values will be updated. You will see a preview of all detected changes before anything is saved — review carefully before confirming. The ATL Qty, Monthly Consumption, and Months of Stock columns are read-only and cannot be changed via upload.
       </div>
       <div style="font-weight:600;margin-bottom:6px;">Do NOT change these columns:</div>
       <div style="font-size:12px;color:var(--text2)">Item Name, ProClean Name, UOM, Total On Water, Atlanta (ATL) Qty — these are read-only. Changing Item Name will cause rows to not be found during upload.</div>
@@ -1204,7 +1191,7 @@ function openPkFilePicker() { closeUploadInstructions(); document.getElementById
 
 let pendingBulkChanges=[];
 function parseCsv(text){const lines=text.trim().split('\n');const headers=lines[0].split(',').map(h=>h.replace(/"/g,'').trim().toLowerCase().replace(/ /g,'_').replace(/[(]/g,'').replace(/[)]/g,''));return lines.slice(1).map(line=>{const vals=[];let cur='',inQ=false;for(const ch of line){if(ch==='"')inQ=!inQ;else if(ch===','&&!inQ){vals.push(cur.trim());cur='';}else cur+=ch;}vals.push(cur.trim());const row={};headers.forEach((h,i)=>row[h]=vals[i]||'');return row;});}
-async function handlePkUpload(event){const file=event.target.files[0];if(!file)return;const text=await file.text();const rawRows=parseCsv(text);const rows=rawRows.map(r=>{const row={pk_name:r.item_name||r.pk_name||'',qty_in_pakistan:r.qty_in_pakistan!==''?r.qty_in_pakistan:undefined,monthly_consumption:r.monthly_consumption!==''?r.monthly_consumption:undefined,notes:r.notes!==''?r.notes:undefined};if(pkData&&pkData.shipments){for(const ship of pkData.shipments){const sn=ship.name.toLowerCase().replace(/\//g,'_').replace(/[^a-z0-9_]/g,'');const key=Object.keys(r).find(k=>k.includes(sn));if(key&&r[key]!=='')row['shipment_'+ship.name]=r[key];}}return row;});event.target.value='';try{const res=await fetch(API+'/api/pk/bulk-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows})}).then(r=>r.json());showBulkModal(res.changes,'pakistan');}catch(e){alert('Error: '+e.message);}}
+async function handlePkUpload(event){const file=event.target.files[0];if(!file)return;const text=await file.text();const rawRows=parseCsv(text);const rows=rawRows.map(r=>{const row={pk_name:r.item_name||r.pk_name||'',qty_in_pakistan:r.qty_in_pakistan!==''?r.qty_in_pakistan:undefined,notes:r.notes!==''?r.notes:undefined};if(pkData&&pkData.shipments){for(const ship of pkData.shipments){const sn=ship.name.toLowerCase().replace(/\//g,'_').replace(/[^a-z0-9_]/g,'');const key=Object.keys(r).find(k=>k.includes(sn));if(key&&r[key]!=='')row['shipment_'+ship.name]=r[key];}}return row;});event.target.value='';try{const res=await fetch(API+'/api/pk/bulk-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows})}).then(r=>r.json());showBulkModal(res.changes,'pakistan');}catch(e){alert('Error: '+e.message);}}
 function showBulkModal(changes,type){pendingBulkChanges=changes;document.getElementById('bulk-modal').style.display='flex';const valid=changes.filter(c=>c.status==='changed'),notFound=changes.filter(c=>c.status==='not_found');document.getElementById('bulk-apply-btn').dataset.type=type;if(valid.length===0&&notFound.length===0){document.getElementById('bulk-modal-body').innerHTML='<div style="text-align:center;padding:40px;color:var(--text3)">No changes detected.</div>';document.getElementById('bulk-apply-btn').style.display='none';return;}document.getElementById('bulk-apply-btn').style.display='block';let html='';if(valid.length>0){html+='<div style="font-size:13px;font-weight:600;margin-bottom:12px">'+valid.length+' item(s) with changes:</div>';html+='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:var(--surface2)"><th style="padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)">Item</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)">Field</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)">Current</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)">New</th></tr></thead><tbody>';for(const c of valid)for(const f of c.fields)html+=`<tr style="border-bottom:1px solid var(--border)"><td style="padding:8px 12px;font-weight:500">${c.name||c.pk_name}</td><td style="padding:8px 12px;color:var(--text2)">${f.label}</td><td style="padding:8px 12px;font-family:var(--mono);color:var(--text3)">${f.current}</td><td style="padding:8px 12px;font-family:var(--mono);color:var(--green);font-weight:600">${f.new}</td></tr>`;html+='</tbody></table>';}if(notFound.length>0)html+='<div style="margin-top:16px;font-size:12px;color:var(--text3)">'+notFound.length+' not found: '+notFound.map(c=>c.pk_name||c.identifier).join(', ')+'</div>';document.getElementById('bulk-modal-body').innerHTML=html;}
 async function applyBulkUpload(){const btn=document.getElementById('bulk-apply-btn'),valid=pendingBulkChanges.filter(c=>c.status==='changed');btn.textContent='Applying...';btn.disabled=true;try{const res=await fetch(API+'/api/pk/bulk-apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({changes:valid})}).then(r=>r.json());closeBulkModal();renderPakistanStock();alert('Done - '+res.success+' updated'+(res.failed>0?', '+res.failed+' failed':'')+'.');}catch(e){alert('Error: '+e.message);}finally{btn.textContent='Apply Changes';btn.disabled=false;}}
 function closeBulkModal(){document.getElementById('bulk-modal').style.display='none';pendingBulkChanges=[];}
