@@ -2095,13 +2095,21 @@ const AR_COMPANY_KEYS = ['company1', 'company2', 'company3'];
 //   status: 'ok' | 'overdue' | 'no_terms'
 async function getArData(companyKey) {
   const company = appData.companies[companyKey];
-  if (!company?.tokens) return { companyName: company?.name || companyKey, asOf: null, rows: [] };
+  if (!company?.tokens) return { companyName: company?.name || companyKey, asOf: null, rows: [], error: 'Company not connected to QBO — reconnect on the main dashboard.' };
 
   const [report, invoiceData, termsRes] = await Promise.all([
     qboGet(companyKey, 'reports/AgedReceivables'),
     qboGet(companyKey, `query?query=${encodeURIComponent("SELECT * FROM Invoice WHERE Balance > '0' MAXRESULTS 1000")}`),
     pool.query('SELECT customer_name, terms_days FROM ar_customer_terms WHERE company_key = $1', [companyKey]),
   ]);
+
+  if (report.Fault) {
+    console.error(`[AR ${companyKey}] AgedReceivables Fault:`, JSON.stringify(report.Fault));
+    return { companyName: company.name, asOf: null, rows: [], error: 'QBO error: ' + JSON.stringify(report.Fault) };
+  }
+  if (invoiceData.Fault) {
+    console.error(`[AR ${companyKey}] Invoice query Fault:`, JSON.stringify(invoiceData.Fault));
+  }
 
   const rows = parseAgedReport(report);
 
@@ -2153,12 +2161,20 @@ async function getArData(companyKey) {
 // payment instruction emails), grouped by vendor name.
 async function getApData() {
   const company = appData.companies['company1'];
-  if (!company?.tokens) return { companyName: company?.name || 'ProClean', asOf: null, rows: [], billsByVendor: {} };
+  if (!company?.tokens) return { companyName: company?.name || 'ProClean', asOf: null, rows: [], billsByVendor: {}, error: 'ProClean not connected to QBO — reconnect on the main dashboard.' };
 
   const [report, billData] = await Promise.all([
     qboGet('company1', 'reports/AgedPayables'),
     qboGet('company1', `query?query=${encodeURIComponent("SELECT * FROM Bill WHERE Balance > '0' MAXRESULTS 1000")}`),
   ]);
+
+  if (report.Fault) {
+    console.error('[AP company1] AgedPayables Fault:', JSON.stringify(report.Fault));
+    return { companyName: company.name, asOf: null, rows: [], billsByVendor: {}, error: 'QBO error: ' + JSON.stringify(report.Fault) };
+  }
+  if (billData.Fault) {
+    console.error('[AP company1] Bill query Fault:', JSON.stringify(billData.Fault));
+  }
 
   const rows = parseAgedReport(report);
 
