@@ -2154,7 +2154,9 @@ async function getArData(companyKey) {
       : null;
   }
 
-  return { companyName: company.name, asOf: report?.Header?.Time || null, rows };
+  const result = { companyName: company.name, asOf: report?.Header?.Time || null, rows };
+  if (rows.length === 0) result._rawReport = report;
+  return result;
 }
 
 // Fetches AgedPayables for ProClean and the underlying open bills (for itemized
@@ -2192,7 +2194,9 @@ async function getApData() {
     });
   }
 
-  return { companyName: company.name, asOf: report?.Header?.Time || null, rows, billsByVendor };
+  const result = { companyName: company.name, asOf: report?.Header?.Time || null, rows, billsByVendor };
+  if (rows.length === 0) result._rawReport = report;
+  return result;
 }
 
 // GET AR for a single company (company1/2/3)
