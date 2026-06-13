@@ -233,6 +233,39 @@
     .pi-vendor-name { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
     .pi-subtotal { display: flex; justify-content: space-between; font-size: 12px; color: var(--text2); padding: 4px 0; }
 
+    /* ── Commission cards ── */
+    .commission-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 18px 20px; margin-bottom: 14px; }
+    .commission-card-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; flex-wrap: wrap; gap: 8px; }
+    .commission-card-title { font-size: 14px; font-weight: 700; color: var(--text); }
+    .commission-card-sub { font-size: 12px; color: var(--text3); }
+    .commission-amount { font-size: 18px; font-weight: 700; font-family: var(--mono); color: var(--text); }
+    .commission-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin-bottom: 12px; }
+    .commission-field-label { font-size: 11px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+    .commission-input { width: 100%; padding: 7px 10px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface2); font-family: var(--mono); font-size: 13px; color: var(--text); outline: none; }
+    .commission-input:focus { border-color: var(--blue); }
+    .commission-cc-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text2); }
+    .commission-cc-row input { width: 16px; height: 16px; accent-color: var(--blue); cursor: pointer; }
+    .po-row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+    .po-row .commission-input { flex: 1; }
+    .po-remove-btn { background: none; border: none; color: var(--text3); cursor: pointer; font-size: 16px; padding: 0 4px; line-height: 1; }
+    .po-remove-btn:hover { color: var(--red); }
+    .commission-result { display: flex; justify-content: space-between; align-items: baseline; padding-top: 12px; border-top: 1px solid var(--border); margin-top: 4px; }
+    .commission-result-label { font-size: 13px; font-weight: 700; color: var(--text2); }
+    .commission-result-value { font-size: 20px; font-weight: 700; font-family: var(--mono); color: var(--amber); }
+
+    /* ── Mariam table ── */
+    .mariam-table { width: 100%; border-collapse: collapse; }
+    .mariam-table th { background: var(--surface2); text-align: left; padding: 10px 14px; font-size: 11px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    .mariam-table th.num, .mariam-table td.num { text-align: right; }
+    .mariam-table td { padding: 10px 14px; font-size: 13px; border-bottom: 1px solid var(--border); font-family: var(--mono); white-space: nowrap; }
+    .mariam-table td:nth-child(2) { font-family: var(--font); }
+    .mariam-table tr:last-child td { border-bottom: none; }
+    .mariam-table tr.overdue-row td { background: #fee2e2 !important; }
+    .mariam-table tr.overdue-row td:first-child { box-shadow: inset 4px 0 0 0 var(--red); }
+    .mariam-table tr.no-terms-row td { background: #fefcbf !important; }
+    .mariam-table tr.no-terms-row td:first-child { box-shadow: inset 4px 0 0 0 var(--amber); }
+    .mariam-table tr.paid-row td { color: var(--text3); }
+
     @media (max-width: 900px) {
       .stat-grid { grid-template-columns: repeat(2, 1fr); }
       .sidebar { width: 64px; min-width: 64px; }
@@ -271,6 +304,10 @@
       <button class="nav-item" onclick="showPage('profit')">
         <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3 17l6-6 4 4 8-8M14 7h7v7"/></svg>
         <span>Profit</span>
+      </button>
+      <button class="nav-item" onclick="showPage('mariam')">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+        <span>Mariam Inv.</span>
       </button>
     </nav>
     <div class="sidebar-footer">
@@ -396,14 +433,24 @@
       <div class="page-header">
         <div>
           <h1 class="page-title">Commission Calculator</h1>
-          <p class="page-sub">Sale price (invoices) &minus; cost price (bills from ProClean) &minus; shipping &minus; CC fees = net profit. Commission = 50% of net profit.</p>
+          <p class="page-sub" id="commission-sub">TLP: invoice &minus; POs &minus; freight &minus; (3% if paid by CC) = net profit, commission = 50%. &nbsp;|&nbsp; BEG: invoice &minus; freight &minus; (3% if paid by CC) &minus; tariff = new amount, commission = 5%.</p>
         </div>
       </div>
       <div class="filter-tabs" id="commission-company-tabs">
-        <button class="filter-tab active" onclick="setCommissionCompany('company2', this)">Linen Pros</button>
+        <button class="filter-tab active" onclick="setCommissionCompany('company2', this)">Linen Pros (TLP)</button>
         <button class="filter-tab" onclick="setCommissionCompany('company3', this)">Brown Eyed Girl</button>
       </div>
+      <div class="filter-tabs" id="commission-month-tabs"></div>
 
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap">
+        <button class="btn-ghost" onclick="commissionShiftDay(-1)">&lsaquo; Prev Day</button>
+        <input type="date" class="terms-input" style="width:140px" id="commission-date" onchange="onCommissionDateChange()">
+        <button class="btn-ghost" onclick="commissionShiftDay(1)">Next Day &rsaquo;</button>
+        <div style="flex:1"></div>
+        <button class="btn-primary" onclick="exportCommissionMonth()">Export Month to Excel</button>
+      </div>
+
+      <div id="commission-summary"></div>
       <div id="commission-content"><div class="loading"><div class="spinner"></div> Loading…</div></div>
     </div>
 
@@ -416,6 +463,25 @@
         </div>
       </div>
       <div id="profit-content"><div class="loading"><div class="spinner"></div> Loading…</div></div>
+    </div>
+
+    <!-- MARIAM INVESTMENTS PAGE -->
+    <div class="page" id="page-mariam">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Mariam Investments LLC</h1>
+          <p class="page-sub">Receivables for Beck's Classic and Encompass Group LLC over a date range (future dates allowed)</p>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap">
+        <input type="date" class="terms-input" style="width:140px" id="mariam-start" onchange="loadMariam()">
+        <span style="color:var(--text3);font-size:13px">to</span>
+        <input type="date" class="terms-input" style="width:140px" id="mariam-end" onchange="loadMariam()">
+        <div style="flex:1"></div>
+        <button class="btn-primary" onclick="exportMariamSelected()">Export Selected</button>
+        <button class="btn-ghost" onclick="exportMariamAll()">Export All</button>
+      </div>
+      <div id="mariam-content"><div class="loading"><div class="spinner"></div> Loading…</div></div>
     </div>
 
     <!-- Floating invoice selection bar -->
@@ -483,13 +549,14 @@ function showPage(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-' + name).classList.add('active');
-  const navMap = { dashboard: 0, receivables: 1, payables: 2, commission: 3, profit: 4 };
+  const navMap = { dashboard: 0, receivables: 1, payables: 2, commission: 3, profit: 4, mariam: 5 };
   document.querySelectorAll('.nav-item')[navMap[name]].classList.add('active');
   if (name === 'dashboard') loadDashboard();
   if (name === 'receivables') loadAr(currentArCompany);
   if (name === 'payables') loadAp();
   if (name === 'commission') loadCommission(currentCommissionCompany);
   if (name === 'profit') loadProfit();
+  if (name === 'mariam') loadMariam();
 }
 
 const COMPANY_LABELS = { company1: 'ProClean', company2: 'Linen Pros', company3: 'Brown Eyed Girl' };
@@ -1042,132 +1109,390 @@ async function loadDashboard() {
 })();
 
 // ── Commission Calculator ──────────────────────────────────────────────────────
+// Per-invoice manual entry (POs aren't in QBO for TLP/BEG). Entries are saved
+// permanently keyed by invoice doc number, so any past day's data persists.
 let currentCommissionCompany = 'company2';
-const COMMISSION_PERIOD_LABELS = { last30: 'Last 30 Days', last60: 'Last 60 Days', last90: 'Last 90 Days' };
+let currentCommissionMonth = null;  // 'YYYY-MM'
+let currentCommissionDate = null;   // 'YYYY-MM-DD'
+let commissionMonthData = null;     // cached { companyName, invoices: [...] } for currentCommissionMonth
+const CC_FEE_RATE = 0.03;
+
+function ymd(date) {
+  return date.toISOString().split('T')[0];
+}
+
+function monthKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function monthLabel(monthStr) {
+  const [y, m] = monthStr.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+function monthRange(monthStr) {
+  const [y, m] = monthStr.split('-').map(Number);
+  const start = `${monthStr}-01`;
+  const lastDay = new Date(y, m, 0).getDate();
+  const end = `${monthStr}-${String(lastDay).padStart(2, '0')}`;
+  return { start, end, lastDay };
+}
 
 function setCommissionCompany(key, btn) {
   currentCommissionCompany = key;
   document.querySelectorAll('#commission-company-tabs .filter-tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
+  // Reset to the current month/today whenever switching companies
+  currentCommissionMonth = null;
   loadCommission(key);
 }
 
+function buildCommissionMonthTabs() {
+  const now = new Date();
+  const tabsEl = document.getElementById('commission-month-tabs');
+  const months = [0, 1, 2].map(i => monthKey(new Date(now.getFullYear(), now.getMonth() - i, 1)));
+  if (!currentCommissionMonth) currentCommissionMonth = months[0];
+  tabsEl.innerHTML = months.map(m => {
+    const active = m === currentCommissionMonth ? 'active' : '';
+    return `<button class="filter-tab ${active}" onclick="setCommissionMonth('${m}', this)">${monthLabel(m)}</button>`;
+  }).join('');
+}
+
+function setCommissionMonth(month, btn) {
+  currentCommissionMonth = month;
+  document.querySelectorAll('#commission-month-tabs .filter-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+
+  const now = new Date();
+  const thisMonth = monthKey(now);
+  const { start, end } = monthRange(month);
+  currentCommissionDate = (month === thisMonth) ? ymd(now) : start;
+
+  const dateInput = document.getElementById('commission-date');
+  dateInput.min = start;
+  dateInput.max = end;
+  dateInput.value = currentCommissionDate;
+
+  loadCommissionMonth();
+}
+
 async function loadCommission(companyKey) {
+  buildCommissionMonthTabs();
+  const { start, end } = monthRange(currentCommissionMonth);
+  const now = new Date();
+  const thisMonth = monthKey(now);
+  if (!currentCommissionDate) currentCommissionDate = (currentCommissionMonth === thisMonth) ? ymd(now) : start;
+
+  const dateInput = document.getElementById('commission-date');
+  dateInput.min = start;
+  dateInput.max = end;
+  dateInput.value = currentCommissionDate;
+
+  await loadCommissionMonth();
+}
+
+async function loadCommissionMonth() {
   const content = document.getElementById('commission-content');
   content.innerHTML = '<div class="loading"><div class="spinner"></div> Loading…</div>';
   try {
-    const data = await apiFetch(`/api/commission/${companyKey}`);
-    renderCommission(data, companyKey);
+    const data = await apiFetch(`/api/commission2/${currentCommissionCompany}/month?month=${currentCommissionMonth}`);
+    commissionMonthData = data;
+    renderCommissionDay();
   } catch (e) {
     content.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
   }
 }
 
-function periodBlockHtml(period, data, companyKey) {
-  const b = data.buckets[period];
-  return `
-    <div class="section-title">${COMMISSION_PERIOD_LABELS[period]}</div>
-    <div class="stat-grid">
+function commissionShiftDay(delta) {
+  const dateInput = document.getElementById('commission-date');
+  const d = new Date(currentCommissionDate + 'T00:00:00');
+  d.setDate(d.getDate() + delta);
+  const next = ymd(d);
+  if (next < dateInput.min || next > dateInput.max) return; // stay within the selected month
+  currentCommissionDate = next;
+  dateInput.value = next;
+  renderCommissionDay();
+}
+
+function onCommissionDateChange() {
+  const dateInput = document.getElementById('commission-date');
+  const newDate = dateInput.value;
+  const newMonth = newDate.slice(0, 7);
+  currentCommissionDate = newDate;
+  if (newMonth !== currentCommissionMonth) {
+    currentCommissionMonth = newMonth;
+    buildCommissionMonthTabs();
+    const { start, end } = monthRange(newMonth);
+    dateInput.min = start;
+    dateInput.max = end;
+    loadCommissionMonth();
+  } else {
+    renderCommissionDay();
+  }
+}
+
+// Mirrors server-side computeCommission() so edits update instantly without a round trip.
+function recomputeInvoiceCommission(inv) {
+  const ccFee = inv.paidByCc ? inv.subtotal * CC_FEE_RATE : 0;
+  inv.ccFee = ccFee;
+  if (currentCommissionCompany === 'company2') {
+    const poTotal = inv.pos.reduce((s, p) => s + (parseFloat(p.po_amount) || 0), 0);
+    inv.poTotal = poTotal;
+    inv.netProfit = inv.subtotal - poTotal - inv.freightCost - ccFee;
+    inv.commission = inv.netProfit * 0.5;
+  } else {
+    inv.newAmount = inv.subtotal - inv.freightCost - ccFee - inv.additionalTariff;
+    inv.commission = inv.newAmount * 0.05;
+  }
+}
+
+function renderCommissionDay() {
+  const content = document.getElementById('commission-content');
+  const summary = document.getElementById('commission-summary');
+  if (!commissionMonthData) return;
+
+  const dayInvoices = commissionMonthData.invoices.filter(inv => (inv.txnDate || '').slice(0, 10) === currentCommissionDate);
+  const dayTotal = dayInvoices.reduce((s, inv) => s + inv.commission, 0);
+  const monthTotal = commissionMonthData.invoices.reduce((s, inv) => s + inv.commission, 0);
+
+  summary.innerHTML = `
+    <div class="stat-grid" style="grid-template-columns: repeat(2, 1fr); margin-bottom:18px">
       <div class="stat-card" style="--c: var(--blue)">
-        <div class="stat-label">Total Sales</div>
-        <div class="stat-value">${fmtMoney(b.totalSales)}</div>
-        <div class="stat-sub">${b.invoiceCount} invoice${b.invoiceCount === 1 ? '' : 's'}</div>
-      </div>
-      <div class="stat-card" style="--c: #2d3748">
-        <div class="stat-label">Cost (Bills/POs from ProClean)</div>
-        <div class="stat-value">${fmtMoney(b.totalCost)}</div>
-        <div class="stat-sub">${b.billCount} bill${b.billCount === 1 ? '' : 's'}</div>
-      </div>
-      <div class="stat-card" style="--c: var(--green)">
-        <div class="stat-label">Gross Profit</div>
-        <div class="stat-value">${fmtMoney(b.grossProfit)}</div>
-        <div class="stat-sub">Sales &minus; Cost</div>
+        <div class="stat-label">Commission — ${new Date(currentCommissionDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</div>
+        <div class="stat-value">${fmtMoney(dayTotal)}</div>
+        <div class="stat-sub">${dayInvoices.length} invoice${dayInvoices.length === 1 ? '' : 's'}</div>
       </div>
       <div class="stat-card" style="--c: var(--amber)">
-        <div class="stat-label">Commission (50%)</div>
-        <div class="stat-value">${fmtMoney(b.commission)}</div>
-        <div class="stat-sub">Net Profit ${fmtMoney(b.netProfit)}</div>
+        <div class="stat-label">Commission — ${monthLabel(currentCommissionMonth)} (Total)</div>
+        <div class="stat-value">${fmtMoney(monthTotal)}</div>
+        <div class="stat-sub">${commissionMonthData.invoices.length} invoice${commissionMonthData.invoices.length === 1 ? '' : 's'} this month</div>
       </div>
     </div>
-    <div class="breakdown-table">
-      <table>
-        <tbody>
-          <tr>
-            <td style="width:50%">Shipping Cost</td>
-            <td class="num"><input class="terms-input" style="width:100px;text-align:right" type="number" min="0" step="0.01" id="commission-shipping-${period}" value="${b.shippingCost.toFixed(2)}" oninput="debounceCommissionAdj('${companyKey}','${period}')"></td>
-          </tr>
-          <tr>
-            <td>Credit Card Cost</td>
-            <td class="num"><input class="terms-input" style="width:100px;text-align:right" type="number" min="0" step="0.01" id="commission-cc-${period}" value="${b.ccCost.toFixed(2)}" oninput="debounceCommissionAdj('${companyKey}','${period}')"></td>
-          </tr>
-          <tr>
-            <td style="font-weight:700">Net Profit</td>
-            <td class="num" style="font-weight:700">${fmtMoney(b.netProfit)}</td>
-          </tr>
-          <tr>
-            <td style="font-weight:700;color:var(--amber)">Commission (50% of Net Profit)</td>
-            <td class="num" style="font-weight:700;color:var(--amber)">${fmtMoney(b.commission)}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>`;
-}
-
-function renderCommission(data, companyKey) {
-  const content = document.getElementById('commission-content');
-
-  const invoiceRows = data.invoices.map(inv => {
-    const date = inv.txnDate ? new Date(inv.txnDate).toLocaleDateString('en-US') : '—';
-    return `<tr><td>${date}</td><td>${inv.docNumber}</td><td>${inv.customerName}</td><td style="text-align:right">${fmtMoney(inv.subtotal)}</td></tr>`;
-  }).join('');
-
-  const billRows = data.bills.map(bill => {
-    const date = bill.txnDate ? new Date(bill.txnDate).toLocaleDateString('en-US') : '—';
-    return `<tr><td>${date}</td><td>${bill.docNumber}</td><td>${bill.vendorName}</td><td style="text-align:right">${fmtMoney(bill.amount)}</td></tr>`;
-  }).join('');
-
-  content.innerHTML = `
-    <p style="font-size:12px;color:var(--text3);margin-bottom:4px">Sale price (invoice subtotal) &minus; cost price (bills/POs from ProClean) &minus; shipping &minus; CC fees = net profit. Commission = 50% of net profit. Shipping/CC aren't pulled from QBO yet — enter them manually per window below.</p>
-    ${periodBlockHtml('last30', data, companyKey)}
-    ${periodBlockHtml('last60', data, companyKey)}
-    ${periodBlockHtml('last90', data, companyKey)}
-
-    <div class="section-title">Invoices (Sales, last 90 days)</div>
-    <div class="breakdown-table">
-      <table>
-        <thead><tr><th>Date</th><th>Invoice #</th><th>Customer</th><th class="num">Subtotal</th></tr></thead>
-        <tbody>${invoiceRows || '<tr><td colspan="4" class="empty-state">No invoices in the last 90 days</td></tr>'}</tbody>
-      </table>
-    </div>
-
-    <div class="section-title">Bills / POs from ProClean (Cost, last 90 days)</div>
-    <div class="breakdown-table">
-      <table>
-        <thead><tr><th>Date</th><th>Bill #</th><th>Vendor</th><th class="num">Amount</th></tr></thead>
-        <tbody>${billRows || '<tr><td colspan="4" class="empty-state">No bills in the last 90 days</td></tr>'}</tbody>
-      </table>
-    </div>
   `;
-}
 
-let commissionAdjTimer = null;
-function debounceCommissionAdj(companyKey, period) {
-  clearTimeout(commissionAdjTimer);
-  commissionAdjTimer = setTimeout(() => saveCommissionAdj(companyKey, period), 800);
-}
-
-async function saveCommissionAdj(companyKey, period) {
-  const shipping = parseFloat(document.getElementById(`commission-shipping-${period}`).value) || 0;
-  const cc = parseFloat(document.getElementById(`commission-cc-${period}`).value) || 0;
-  try {
-    await apiFetch(`/api/commission/${companyKey}/adjustments`, {
-      method: 'PATCH',
-      body: JSON.stringify({ period, shipping_cost: shipping, cc_cost: cc })
-    });
-    await loadCommission(companyKey);
-  } catch (e) {
-    alert('Error saving adjustment: ' + e.message);
+  if (!dayInvoices.length) {
+    content.innerHTML = '<div class="empty-state">No invoices created on this day.</div>';
+    return;
   }
+
+  content.innerHTML = dayInvoices.map(inv => renderCommissionCard(inv)).join('');
+}
+
+function renderCommissionCard(inv) {
+  const safeDoc = inv.docNumber.replace(/[^a-zA-Z0-9]/g, '_');
+  const isTlp = currentCommissionCompany === 'company2';
+
+  let fieldsHtml = '';
+  if (isTlp) {
+    const poRows = inv.pos.map(po => `
+      <div class="po-row" id="po-row-${safeDoc}-${po.id}">
+        <input class="commission-input" type="text" placeholder="PO #" value="${escapeAttr(po.po_number || '')}" oninput="debouncePo('${inv.docNumber}',${po.id})" id="po-number-${po.id}">
+        <input class="commission-input" type="number" min="0" step="0.01" placeholder="Amount" value="${po.po_amount || ''}" style="max-width:130px" oninput="debouncePo('${inv.docNumber}',${po.id})" id="po-amount-${po.id}">
+        <button class="po-remove-btn" onclick="removePo('${inv.docNumber}',${po.id})" title="Remove PO">✕</button>
+      </div>`).join('');
+
+    fieldsHtml = `
+      <div style="margin-bottom:12px">
+        <div class="commission-field-label">Purchase Orders</div>
+        <div id="po-list-${safeDoc}">${poRows}</div>
+        <button class="btn-ghost" style="margin-top:4px;padding:5px 10px;font-size:12px" onclick="addPo('${inv.docNumber}')">+ Add PO</button>
+      </div>
+      <div class="commission-fields">
+        <div>
+          <div class="commission-field-label">Freight Cost</div>
+          <input class="commission-input" type="number" min="0" step="0.01" value="${inv.freightCost || ''}" placeholder="0.00" oninput="debounceCommissionEntry('${inv.docNumber}')" id="freight-${safeDoc}">
+        </div>
+        <div style="display:flex;align-items:flex-end">
+          <label class="commission-cc-row">
+            <input type="checkbox" ${inv.paidByCc ? 'checked' : ''} onchange="debounceCommissionEntry('${inv.docNumber}')" id="cc-${safeDoc}">
+            Paid by Credit Card (3% fee)
+          </label>
+        </div>
+      </div>
+      <div class="commission-result">
+        <span class="commission-result-label">Net Profit ${fmtMoney(inv.netProfit)} &middot; Commission (50%)</span>
+        <span class="commission-result-value" id="result-${safeDoc}">${fmtMoney(inv.commission)}</span>
+      </div>`;
+  } else {
+    fieldsHtml = `
+      <div class="commission-fields">
+        <div>
+          <div class="commission-field-label">Freight Cost</div>
+          <input class="commission-input" type="number" min="0" step="0.01" value="${inv.freightCost || ''}" placeholder="0.00" oninput="debounceCommissionEntry('${inv.docNumber}')" id="freight-${safeDoc}">
+        </div>
+        <div>
+          <div class="commission-field-label">Additional Tariff</div>
+          <input class="commission-input" type="number" min="0" step="0.01" value="${inv.additionalTariff || ''}" placeholder="0.00" oninput="debounceCommissionEntry('${inv.docNumber}')" id="tariff-${safeDoc}">
+        </div>
+        <div style="display:flex;align-items:flex-end">
+          <label class="commission-cc-row">
+            <input type="checkbox" ${inv.paidByCc ? 'checked' : ''} onchange="debounceCommissionEntry('${inv.docNumber}')" id="cc-${safeDoc}">
+            Paid by Credit Card (3% fee)
+          </label>
+        </div>
+      </div>
+      <div class="commission-result">
+        <span class="commission-result-label">New Amount ${fmtMoney(inv.newAmount)} &middot; Commission (5%)</span>
+        <span class="commission-result-value" id="result-${safeDoc}">${fmtMoney(inv.commission)}</span>
+      </div>`;
+  }
+
+  return `<div class="commission-card" id="card-${safeDoc}">
+    <div class="commission-card-header">
+      <div>
+        <div class="commission-card-title">Invoice #${inv.docNumber} &middot; ${inv.customerName}</div>
+        <div class="commission-card-sub">${new Date(inv.txnDate).toLocaleDateString('en-US')}</div>
+      </div>
+      <div style="text-align:right">
+        <div class="commission-field-label">Invoice Amount</div>
+        <div class="commission-amount">${fmtMoney(inv.subtotal)}</div>
+      </div>
+    </div>
+    ${fieldsHtml}
+  </div>`;
+}
+
+function findInvoice(docNumber) {
+  return commissionMonthData.invoices.find(i => i.docNumber === docNumber);
+}
+
+function refreshCommissionCard(docNumber) {
+  const inv = findInvoice(docNumber);
+  recomputeInvoiceCommission(inv);
+  const safeDoc = docNumber.replace(/[^a-zA-Z0-9]/g, '_');
+  const result = document.getElementById('result-' + safeDoc);
+  if (result) result.textContent = fmtMoney(inv.commission);
+  const label = document.querySelector(`#card-${safeDoc} .commission-result-label`);
+  if (label) {
+    label.innerHTML = currentCommissionCompany === 'company2'
+      ? `Net Profit ${fmtMoney(inv.netProfit)} &middot; Commission (50%)`
+      : `New Amount ${fmtMoney(inv.newAmount)} &middot; Commission (5%)`;
+  }
+  // Update day/month totals without a full re-render
+  const dayInvoices = commissionMonthData.invoices.filter(i => (i.txnDate || '').slice(0, 10) === currentCommissionDate);
+  const dayTotal = dayInvoices.reduce((s, i) => s + i.commission, 0);
+  const monthTotal = commissionMonthData.invoices.reduce((s, i) => s + i.commission, 0);
+  const statValues = document.querySelectorAll('#commission-summary .stat-value');
+  if (statValues[0]) statValues[0].textContent = fmtMoney(dayTotal);
+  if (statValues[1]) statValues[1].textContent = fmtMoney(monthTotal);
+}
+
+let commissionEntryTimer = null;
+function debounceCommissionEntry(docNumber) {
+  clearTimeout(commissionEntryTimer);
+  commissionEntryTimer = setTimeout(() => saveCommissionEntry(docNumber), 600);
+}
+
+async function saveCommissionEntry(docNumber) {
+  const safeDoc = docNumber.replace(/[^a-zA-Z0-9]/g, '_');
+  const inv = findInvoice(docNumber);
+  const freight = parseFloat(document.getElementById('freight-' + safeDoc).value) || 0;
+  const paidByCc = document.getElementById('cc-' + safeDoc).checked;
+  const tariffEl = document.getElementById('tariff-' + safeDoc);
+  const tariff = tariffEl ? (parseFloat(tariffEl.value) || 0) : 0;
+
+  inv.freightCost = freight;
+  inv.paidByCc = paidByCc;
+  inv.additionalTariff = tariff;
+  refreshCommissionCard(docNumber);
+
+  try {
+    await apiFetch(`/api/commission2/${currentCommissionCompany}/invoice/${docNumber}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ freight_cost: freight, paid_by_cc: paidByCc, additional_tariff: tariff })
+    });
+  } catch (e) {
+    alert('Error saving: ' + e.message);
+  }
+}
+
+async function addPo(docNumber) {
+  const inv = findInvoice(docNumber);
+  try {
+    const res = await apiFetch(`/api/commission2/${currentCommissionCompany}/invoice/${docNumber}/pos`, {
+      method: 'POST',
+      body: JSON.stringify({ po_number: '', po_amount: 0 })
+    });
+    inv.pos.push({ id: res.id, po_number: '', po_amount: 0 });
+    const safeDoc = docNumber.replace(/[^a-zA-Z0-9]/g, '_');
+    const card = document.getElementById('card-' + safeDoc);
+    card.outerHTML = renderCommissionCard(inv);
+  } catch (e) {
+    alert('Error adding PO: ' + e.message);
+  }
+}
+
+async function removePo(docNumber, id) {
+  const inv = findInvoice(docNumber);
+  try {
+    await apiFetch(`/api/commission2/pos/${id}`, { method: 'DELETE' });
+    inv.pos = inv.pos.filter(p => p.id !== id);
+    recomputeInvoiceCommission(inv);
+    const safeDoc = docNumber.replace(/[^a-zA-Z0-9]/g, '_');
+    const card = document.getElementById('card-' + safeDoc);
+    card.outerHTML = renderCommissionCard(inv);
+  } catch (e) {
+    alert('Error removing PO: ' + e.message);
+  }
+}
+
+let poSaveTimer = null;
+function debouncePo(docNumber, id) {
+  clearTimeout(poSaveTimer);
+  poSaveTimer = setTimeout(() => savePo(docNumber, id), 600);
+}
+
+async function savePo(docNumber, id) {
+  const poNumber = document.getElementById('po-number-' + id).value;
+  const poAmount = parseFloat(document.getElementById('po-amount-' + id).value) || 0;
+  const inv = findInvoice(docNumber);
+  const po = inv.pos.find(p => p.id === id);
+  if (po) { po.po_number = poNumber; po.po_amount = poAmount; }
+  refreshCommissionCard(docNumber);
+  try {
+    await apiFetch(`/api/commission2/pos/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ po_number: poNumber, po_amount: poAmount })
+    });
+  } catch (e) {
+    alert('Error saving PO: ' + e.message);
+  }
+}
+
+function exportCommissionMonth() {
+  if (!commissionMonthData) return;
+  const isTlp = currentCommissionCompany === 'company2';
+  let header, rows;
+  if (isTlp) {
+    header = 'Date,Invoice #,Customer,Invoice Amount,POs,PO Total,Freight,Paid by CC,CC Fee,Net Profit,Commission\n';
+    rows = commissionMonthData.invoices.map(inv => {
+      const date = new Date(inv.txnDate).toLocaleDateString('en-US');
+      const poStr = inv.pos.map(p => `${p.po_number || 'PO'}:${(parseFloat(p.po_amount) || 0).toFixed(2)}`).join('; ');
+      return [date, `"${inv.docNumber}"`, `"${(inv.customerName || '').replace(/"/g, '""')}"`, inv.subtotal.toFixed(2),
+        `"${poStr}"`, inv.poTotal.toFixed(2), inv.freightCost.toFixed(2), inv.paidByCc ? 'Yes' : 'No', inv.ccFee.toFixed(2),
+        inv.netProfit.toFixed(2), inv.commission.toFixed(2)].join(',');
+    }).join('\n');
+  } else {
+    header = 'Date,Invoice #,Customer,Invoice Amount,Freight,Paid by CC,CC Fee,Additional Tariff,New Amount,Commission\n';
+    rows = commissionMonthData.invoices.map(inv => {
+      const date = new Date(inv.txnDate).toLocaleDateString('en-US');
+      return [date, `"${inv.docNumber}"`, `"${(inv.customerName || '').replace(/"/g, '""')}"`, inv.subtotal.toFixed(2),
+        inv.freightCost.toFixed(2), inv.paidByCc ? 'Yes' : 'No', inv.ccFee.toFixed(2), inv.additionalTariff.toFixed(2),
+        inv.newAmount.toFixed(2), inv.commission.toFixed(2)].join(',');
+    }).join('\n');
+  }
+  const totalCommission = commissionMonthData.invoices.reduce((s, i) => s + i.commission, 0);
+  const totalRow = isTlp
+    ? `Total,,,,,,,,,,${totalCommission.toFixed(2)}`
+    : `Total,,,,,,,,,${totalCommission.toFixed(2)}`;
+
+  const blob = new Blob([header + rows + '\n' + totalRow], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `commission-${currentCommissionCompany}-${currentCommissionMonth}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ── ProClean Profit ──────────────────────────────────────────────────────────
@@ -1250,6 +1575,152 @@ function exportProfitExcel() {
   a.download = `proclean-profit-${new Date().toISOString().split('T')[0]}.csv`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// ── Mariam Investments LLC (Company 4) ─────────────────────────────────────────
+let mariamDataCache = null;
+let selectedMariamInvoices = {}; // customerName -> Set(docNumber)
+
+function defaultMariamRange() {
+  const now = new Date();
+  const start = new Date(now.getTime() - 30 * 86400000);
+  const end = new Date(now.getTime() + 30 * 86400000);
+  return { start: start.toISOString().split('T')[0], end: end.toISOString().split('T')[0] };
+}
+
+async function loadMariam() {
+  const content = document.getElementById('mariam-content');
+  const startInput = document.getElementById('mariam-start');
+  const endInput = document.getElementById('mariam-end');
+  if (!startInput.value || !endInput.value) {
+    const r = defaultMariamRange();
+    startInput.value = r.start;
+    endInput.value = r.end;
+  }
+
+  content.innerHTML = '<div class="loading"><div class="spinner"></div> Loading…</div>';
+  try {
+    const data = await apiFetch(`/api/ar/company4/invoices?start=${startInput.value}&end=${endInput.value}`);
+    mariamDataCache = data;
+    renderMariam(data);
+  } catch (e) {
+    content.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
+  }
+}
+
+function mariamStatusBadge(status) {
+  if (status === 'overdue') return '<span class="status-badge status-overdue">Over Terms</span>';
+  if (status === 'no_terms') return '<span class="status-badge status-no-terms">Terms Not Set</span>';
+  if (status === 'paid') return '<span class="status-badge status-ok">Paid</span>';
+  return '<span class="status-badge status-ok">OK</span>';
+}
+
+function renderMariam(data) {
+  const content = document.getElementById('mariam-content');
+  if (data.error) {
+    content.innerHTML = `<div class="empty-state">${data.error}</div>`;
+    return;
+  }
+
+  content.innerHTML = data.customers.map(c => {
+    const termsVal = c.terms_days != null ? c.terms_days : '';
+    const safeCustomer = c.name.replace(/[^a-zA-Z0-9]/g, '_');
+    if (!selectedMariamInvoices[c.name]) selectedMariamInvoices[c.name] = new Set();
+
+    const rows = c.invoices.map(inv => {
+      const rowClass = inv.status === 'overdue' ? 'overdue-row' : inv.status === 'no_terms' ? 'no-terms-row' : inv.status === 'paid' ? 'paid-row' : '';
+      const created = inv.txnDate ? new Date(inv.txnDate).toLocaleDateString('en-US') : '—';
+      const due = inv.dueDate ? new Date(inv.dueDate).toLocaleDateString('en-US') : '—';
+      const checked = selectedMariamInvoices[c.name].has(inv.docNumber) ? 'checked' : '';
+      return `<tr class="${rowClass}">
+        <td><input type="checkbox" class="bill-check" ${checked} onchange="toggleMariamInvoice('${escapeAttr(c.name)}','${inv.docNumber}',this)">${inv.docNumber}</td>
+        <td>${created}</td>
+        <td>${due}</td>
+        <td class="num">${fmtMoney(inv.subtotal)}</td>
+        <td class="num">${fmtMoney(inv.total)}</td>
+        <td class="num">${fmtMoney(inv.balance)}</td>
+        <td style="text-align:center">${mariamStatusBadge(inv.status)}</td>
+      </tr>`;
+    }).join('');
+
+    return `
+      <div class="section-title" style="display:flex;align-items:center;gap:12px;justify-content:space-between">
+        <span>${c.name}</span>
+        <span style="font-size:12px;font-weight:400;color:var(--text3);display:flex;align-items:center;gap:8px">
+          Terms (days):
+          <input class="terms-input" type="number" min="0" step="1" placeholder="Set" value="${termsVal}"
+                 oninput="debounceTerms('company4','${safeCustomer}',()=>saveMariamTerms('${escapeAttr(c.name)}',this.value,this))" />
+        </span>
+      </div>
+      <div class="ar-table-wrap" style="margin-bottom:20px">
+        <table class="mariam-table">
+          <thead><tr><th>Invoice #</th><th>Created</th><th>Due</th><th class="num">Subtotal</th><th class="num">Total</th><th class="num">Balance</th><th style="text-align:center">Status</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="7" class="empty-state">No invoices for ${c.name} in this date range</td></tr>`}</tbody>
+        </table>
+      </div>`;
+  }).join('');
+}
+
+async function saveMariamTerms(customerName, value, inputEl) {
+  try {
+    await apiFetch('/api/ar/company4/terms', {
+      method: 'PATCH',
+      body: JSON.stringify({ customer_name: customerName, terms_days: value === '' ? null : parseFloat(value) })
+    });
+    inputEl.classList.add('saved');
+    setTimeout(() => inputEl.classList.remove('saved'), 1000);
+    await loadMariam();
+  } catch (e) {
+    alert('Error saving terms: ' + e.message);
+  }
+}
+
+function toggleMariamInvoice(customerName, docNumber, cb) {
+  if (!selectedMariamInvoices[customerName]) selectedMariamInvoices[customerName] = new Set();
+  if (cb.checked) selectedMariamInvoices[customerName].add(docNumber);
+  else selectedMariamInvoices[customerName].delete(docNumber);
+}
+
+function mariamCsvRow(customerName, inv) {
+  const created = inv.txnDate ? new Date(inv.txnDate).toLocaleDateString('en-US') : '';
+  const due = inv.dueDate ? new Date(inv.dueDate).toLocaleDateString('en-US') : '';
+  return [created, `"${inv.docNumber}"`, `"${customerName}"`, due, inv.subtotal.toFixed(2), inv.total.toFixed(2), inv.balance.toFixed(2), inv.status].join(',');
+}
+
+function downloadMariamCsv(rows, filename) {
+  const header = 'Created,Invoice #,Customer,Due,Subtotal,Total,Balance,Status\n';
+  const blob = new Blob([header + rows.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportMariamSelected() {
+  if (!mariamDataCache) return;
+  const rows = [];
+  for (const c of mariamDataCache.customers) {
+    for (const inv of c.invoices) {
+      if (selectedMariamInvoices[c.name] && selectedMariamInvoices[c.name].has(inv.docNumber)) {
+        rows.push(mariamCsvRow(c.name, inv));
+      }
+    }
+  }
+  if (!rows.length) { alert('No invoices selected'); return; }
+  downloadMariamCsv(rows, `mariam-investments-selected-${mariamDataCache.start}_to_${mariamDataCache.end}.csv`);
+}
+
+function exportMariamAll() {
+  if (!mariamDataCache) return;
+  const rows = [];
+  for (const c of mariamDataCache.customers) {
+    for (const inv of c.invoices) {
+      rows.push(mariamCsvRow(c.name, inv));
+    }
+  }
+  downloadMariamCsv(rows, `mariam-investments-all-${mariamDataCache.start}_to_${mariamDataCache.end}.csv`);
 }
 
 
