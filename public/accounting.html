@@ -1622,7 +1622,22 @@ function renderMariam(data) {
     return;
   }
 
-  content.innerHTML = data.customers.map(c => {
+  const totalCard = `
+    <div class="stat-grid" style="grid-template-columns: repeat(3, 1fr); margin-bottom:20px">
+      <div class="stat-card" style="--c: var(--blue)">
+        <div class="stat-label">Total Receivables</div>
+        <div class="stat-value">${fmtMoney(data.totalReceivables)}</div>
+        <div class="stat-sub">Beck's Classic + Encompass Group LLC</div>
+      </div>
+      ${data.customers.map(c => `
+      <div class="stat-card" style="--c: var(--amber)">
+        <div class="stat-label">${c.name}</div>
+        <div class="stat-value">${fmtMoney(c.aging.total)}</div>
+        <div class="stat-sub">${c.invoices.filter(i => i.balance > 0).length} open invoice${c.invoices.filter(i => i.balance > 0).length === 1 ? '' : 's'}</div>
+      </div>`).join('')}
+    </div>`;
+
+  content.innerHTML = totalCard + data.customers.map(c => {
     const termsVal = c.terms_days != null ? c.terms_days : '';
     const safeCustomer = c.name.replace(/[^a-zA-Z0-9]/g, '_');
     if (!selectedMariamInvoices[c.name]) selectedMariamInvoices[c.name] = new Set();
@@ -1636,12 +1651,27 @@ function renderMariam(data) {
         <td><input type="checkbox" class="bill-check" ${checked} onchange="toggleMariamInvoice('${escapeAttr(c.name)}','${inv.docNumber}',this)">${inv.docNumber}</td>
         <td>${created}</td>
         <td>${due}</td>
-        <td class="num">${fmtMoney(inv.subtotal)}</td>
         <td class="num">${fmtMoney(inv.total)}</td>
         <td class="num">${fmtMoney(inv.balance)}</td>
         <td style="text-align:center">${mariamStatusBadge(inv.status)}</td>
       </tr>`;
     }).join('');
+
+    const aging = c.aging;
+    const agingTable = `
+      <div class="breakdown-table" style="margin-bottom:10px">
+        <table>
+          <thead><tr><th>Current</th><th class="num">1-30</th><th class="num">31-60</th><th class="num">61-90</th><th class="num">91+</th><th class="num">Total</th></tr></thead>
+          <tbody><tr>
+            <td class="num">${fmtMoney(aging.current)}</td>
+            <td class="num">${fmtMoney(aging.d1_30)}</td>
+            <td class="num">${fmtMoney(aging.d31_60)}</td>
+            <td class="num">${fmtMoney(aging.d61_90)}</td>
+            <td class="num">${fmtMoney(aging.d91_plus)}</td>
+            <td class="num" style="font-weight:700">${fmtMoney(aging.total)}</td>
+          </tr></tbody>
+        </table>
+      </div>`;
 
     return `
       <div class="section-title" style="display:flex;align-items:center;gap:12px;justify-content:space-between">
@@ -1652,10 +1682,11 @@ function renderMariam(data) {
                  oninput="debounceTerms('company4','${safeCustomer}',()=>saveMariamTerms('${escapeAttr(c.name)}',this.value,this))" />
         </span>
       </div>
+      ${agingTable}
       <div class="ar-table-wrap" style="margin-bottom:20px">
         <table class="mariam-table">
-          <thead><tr><th>Invoice #</th><th>Created</th><th>Due</th><th class="num">Subtotal</th><th class="num">Total</th><th class="num">Balance</th><th style="text-align:center">Status</th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="7" class="empty-state">No invoices for ${c.name} in this date range</td></tr>`}</tbody>
+          <thead><tr><th>Invoice #</th><th>Created</th><th>Due</th><th class="num">Total</th><th class="num">Balance</th><th style="text-align:center">Status</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="6" class="empty-state">No invoices for ${c.name} in this date range</td></tr>`}</tbody>
         </table>
       </div>`;
   }).join('');
@@ -1684,11 +1715,11 @@ function toggleMariamInvoice(customerName, docNumber, cb) {
 function mariamCsvRow(customerName, inv) {
   const created = inv.txnDate ? new Date(inv.txnDate).toLocaleDateString('en-US') : '';
   const due = inv.dueDate ? new Date(inv.dueDate).toLocaleDateString('en-US') : '';
-  return [created, `"${inv.docNumber}"`, `"${customerName}"`, due, inv.subtotal.toFixed(2), inv.total.toFixed(2), inv.balance.toFixed(2), inv.status].join(',');
+  return [created, `"${inv.docNumber}"`, `"${customerName}"`, due, inv.total.toFixed(2), inv.balance.toFixed(2), inv.status].join(',');
 }
 
 function downloadMariamCsv(rows, filename) {
-  const header = 'Created,Invoice #,Customer,Due,Subtotal,Total,Balance,Status\n';
+  const header = 'Created,Invoice #,Customer,Due,Total,Balance,Status\n';
   const blob = new Blob([header + rows.join('\n')], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
