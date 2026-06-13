@@ -101,14 +101,24 @@ async function initDb() {
       last_updated TIMESTAMPTZ DEFAULT NOW(),
       PRIMARY KEY (company_key, customer_name)
     );
-    CREATE TABLE IF NOT EXISTS commission_adjustments (
+    CREATE TABLE IF NOT EXISTS commission_invoice_entries (
       company_key TEXT NOT NULL,
-      period_label TEXT NOT NULL,
-      shipping_cost NUMERIC NOT NULL DEFAULT 0,
-      cc_cost NUMERIC NOT NULL DEFAULT 0,
+      doc_number TEXT NOT NULL,
+      freight_cost NUMERIC NOT NULL DEFAULT 0,
+      paid_by_cc BOOLEAN NOT NULL DEFAULT FALSE,
+      additional_tariff NUMERIC NOT NULL DEFAULT 0,
       last_updated TIMESTAMPTZ DEFAULT NOW(),
-      PRIMARY KEY (company_key, period_label)
+      PRIMARY KEY (company_key, doc_number)
     );
+    CREATE TABLE IF NOT EXISTS commission_invoice_pos (
+      id SERIAL PRIMARY KEY,
+      company_key TEXT NOT NULL,
+      doc_number TEXT NOT NULL,
+      po_number TEXT,
+      po_amount NUMERIC NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_commission_pos_invoice ON commission_invoice_pos (company_key, doc_number);
   `);
   // Migration: allow movement logging even when item isn't matched in proclean_items.
   // Old constraint (NOT NULL + FK) silently blocked logs for unmatched items.
@@ -146,6 +156,7 @@ const CONFIG = {
     company1: { name: 'ProClean', realmId: null, tokens: null },
     company2: { name: 'The Linen Pros', realmId: null, tokens: null },
     company3: { name: 'Brown Eyed Girl', realmId: null, tokens: null },
+    company4: { name: 'Mariam Investments LLC', realmId: null, tokens: null },
   }
 };
 
@@ -734,7 +745,7 @@ app.get('/callback', async (req, res) => {
 // ─── API ROUTES (for dashboard) ──────────────────────────────────────────────
 app.get('/api/status', (req, res) => {
   const companies = {};
-  ['company1', 'company2', 'company3'].forEach(key => {
+  ['company1', 'company2', 'company3', 'company4'].forEach(key => {
     const c = appData.companies[key] || {};
     const obtainedAt = c.tokens?.obtained_at || 0;
     const refreshExpiresAt = obtainedAt + (100 * 24 * 60 * 60 * 1000); // 100 days
@@ -2090,6 +2101,9 @@ function parseAgedReport(report) {
 }
 
 const AR_COMPANY_KEYS = ['company1', 'company2', 'company3'];
+// company4 (Mariam Investments) also uses the Terms system, but doesn't use the
+// AgedReceivables-report-based /api/ar/:companyKey endpoint (see /api/ar/company4/invoices).
+const AR_TERMS_COMPANY_KEYS = [...AR_COMPANY_KEYS, 'company4'];
 
 // Fetches AgedReceivables for a company, merges in saved Terms and computes
 // each customer's overdue status by checking their actual open invoices
@@ -2226,7 +2240,7 @@ app.get('/api/ar/:companyKey', async (req, res) => {
 app.patch('/api/ar/:companyKey/terms', async (req, res) => {
   const { companyKey } = req.params;
   const { customer_name, terms_days } = req.body;
-  if (!AR_COMPANY_KEYS.includes(companyKey)) return res.status(400).json({ error: 'Invalid company' });
+  if (!AR_TERMS_COMPANY_KEYS.includes(companyKey)) return res.status(400).json({ error: 'Invalid company' });
   if (!customer_name) return res.status(400).json({ error: 'customer_name required' });
   try {
     if (terms_days === '' || terms_days === null || terms_days === undefined) {
@@ -2239,6 +2253,78 @@ app.patch('/api/ar/:companyKey/terms', async (req, res) => {
       `, [companyKey, customer_name, parseFloat(terms_days)]);
     }
     res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Mariam Investments LLC (company4) — AR only, 2 customers ───────────────────
+// Unlike company1-3, this is invoice-level data over a date range (not an
+// AgedReceivables snapshot), so future-dated invoices can be viewed too.
+const COMPANY4_CUSTOMERS = ["Beck's Classic", 'Encompass Group LLC'];
+
+app.get('/api/ar/company4/invoices', async (req, res) => {
+  const { start, end } = req.query;
+  if (!start || !end) return res.status(400).json({ error: 'start and end query params required (YYYY-MM-DD)' });
+
+  const company = appData.companies['company4'];
+  if (!company?.tokens) return res.status(400).json({ error: 'Mariam Investments not connected to QBO — connect it on the main dashboard.' });
+
+  try {
+    const [invoiceData, termsRes] = await Promise.all([
+      qboGet('company4', `query?query=${encodeURIComponent(`SELECT * FROM Invoice WHERE TxnDate >= '${start}' AND TxnDate <= '${end}' MAXRESULTS 1000`)}`),
+      pool.query('SELECT customer_name, terms_days FROM ar_customer_terms WHERE company_key=$1', ['company4']),
+    ]);
+
+    if (invoiceData.Fault) return res.status(500).json({ error: 'QBO error: ' + JSON.stringify(invoiceData.Fault) });
+
+    const termsMap = {};
+    for (const t of termsRes.rows) termsMap[t.customer_name.toUpperCase()] = parseFloat(t.terms_days);
+
+    const targetNames = COMPANY4_CUSTOMERS.map(n => n.toUpperCase());
+    const now = Date.now();
+    const MS_PER_DAY = 86400000;
+
+    const customers = COMPANY4_CUSTOMERS.map(name => ({
+      name,
+      terms_days: termsMap[name.toUpperCase()] ?? null,
+      invoices: [],
+    }));
+
+    for (const inv of (invoiceData.QueryResponse?.Invoice || [])) {
+      const custName = inv.CustomerRef?.name || '';
+      const idx = targetNames.indexOf(custName.toUpperCase());
+      if (idx === -1) continue;
+
+      const tax = parseFloat(inv.TxnTaxDetail?.TotalTax) || 0;
+      const balance = parseFloat(inv.Balance) || 0;
+      const total = (parseFloat(inv.TotalAmt) || 0);
+      const termsDays = customers[idx].terms_days;
+
+      let status;
+      if (balance <= 0) {
+        status = 'paid';
+      } else if (termsDays == null) {
+        status = 'no_terms';
+      } else {
+        const ageDays = (now - new Date(inv.TxnDate).getTime()) / MS_PER_DAY;
+        status = ageDays > termsDays ? 'overdue' : 'ok';
+      }
+
+      customers[idx].invoices.push({
+        docNumber: inv.DocNumber || inv.Id,
+        txnDate: inv.TxnDate,
+        dueDate: inv.DueDate || null,
+        subtotal: total - tax,
+        total,
+        balance,
+        status,
+      });
+    }
+
+    for (const c of customers) {
+      c.invoices.sort((a, b) => new Date(a.txnDate) - new Date(b.txnDate));
+    }
+
+    res.json({ companyName: company.name, start, end, customers });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -2450,102 +2536,162 @@ app.post('/api/ar/send-reminder', async (req, res) => {
 
 
 // ── Commission Calculator (Linen Pros / Brown Eyed Girl) ───────────────────────
-// Formula: net profit = sale price (invoice subtotal) - cost price (bills from
-// ProClean) - shipping cost - credit card cost. Commission = 50% of net profit.
+// Commission is calculated per-invoice with manually-entered details (POs aren't
+// in QBO for these companies). Entries are saved permanently per invoice
+// (doc number), so revisiting any past day shows what was entered.
 //
-// Sale price and cost price come directly from each company's own QBO
-// transactions (Invoices = sales, Bills/POs = cost of goods from ProClean), NOT
-// from proclean_items — so this works correctly even for items that aren't
-// tracked in ProClean's inventory database.
+// TLP (company2):
+//   net profit = invoice amount - sum(PO amounts) - freight - (3% of invoice
+//                amount if paid by credit card)
+//   commission = 50% of net profit
 //
-// Shipping/CC costs aren't available programmatically yet, so they're entered
-// manually per trailing window (last 30/60/90 days) and stored in
-// commission_adjustments.
+// BEG (company3):
+//   new amount = invoice amount - freight - (3% of invoice amount if paid by
+//                credit card) - additional tariff
+//   commission = 5% of new amount
+//
+// "Invoice amount" = the full invoiced amount (TotalAmt, including tax). These
+// companies' invoices are all out-of-state/untaxed anyway, but per request the
+// 3% CC fee and all commission math are based on the full charged amount.
 const COMMISSION_COMPANY_KEYS = ['company2', 'company3'];
-const COMMISSION_PERIODS = ['last30', 'last60', 'last90'];
+const CC_FEE_RATE = 0.03;
 
-app.get('/api/commission/:companyKey', async (req, res) => {
-  const { companyKey } = req.params;
-  if (!COMMISSION_COMPANY_KEYS.includes(companyKey)) return res.status(400).json({ error: 'Invalid company' });
+// Computes the commission breakdown for one invoice given its manual entry + POs.
+function computeCommission(companyKey, subtotal, entry, pos) {
+  const freight = parseFloat(entry?.freight_cost) || 0;
+  const paidByCc = !!entry?.paid_by_cc;
+  const ccFee = paidByCc ? subtotal * CC_FEE_RATE : 0;
 
+  if (companyKey === 'company2') {
+    const poTotal = pos.reduce((s, p) => s + (parseFloat(p.po_amount) || 0), 0);
+    const netProfit = subtotal - poTotal - freight - ccFee;
+    return { netProfit, commission: netProfit * 0.5, poTotal, ccFee };
+  } else {
+    const tariff = parseFloat(entry?.additional_tariff) || 0;
+    const newAmount = subtotal - freight - ccFee - tariff;
+    return { newAmount, commission: newAmount * 0.05, ccFee };
+  }
+}
+
+// Fetches all invoices for a company within a date range, joined with saved
+// commission entries and POs, with the commission breakdown computed per invoice.
+async function getCommissionInvoices(companyKey, start, end) {
   const company = appData.companies[companyKey];
-  if (!company?.tokens) return res.status(400).json({ error: 'Company not connected to QBO — reconnect on the main dashboard.' });
+  if (!company?.tokens) throw Object.assign(new Error('Company not connected to QBO — reconnect on the main dashboard.'), { status: 400 });
 
+  const [invoiceData, entriesRes, posRes] = await Promise.all([
+    qboGet(companyKey, `query?query=${encodeURIComponent(`SELECT * FROM Invoice WHERE TxnDate >= '${start}' AND TxnDate <= '${end}' MAXRESULTS 1000`)}`),
+    pool.query('SELECT * FROM commission_invoice_entries WHERE company_key=$1', [companyKey]),
+    pool.query('SELECT * FROM commission_invoice_pos WHERE company_key=$1 ORDER BY id ASC', [companyKey]),
+  ]);
+
+  if (invoiceData.Fault) throw Object.assign(new Error('QBO error: ' + JSON.stringify(invoiceData.Fault)), { status: 500 });
+
+  const entryMap = {};
+  for (const row of entriesRes.rows) entryMap[row.doc_number] = row;
+
+  const posMap = {};
+  for (const row of posRes.rows) {
+    if (!posMap[row.doc_number]) posMap[row.doc_number] = [];
+    posMap[row.doc_number].push({ id: row.id, po_number: row.po_number, po_amount: parseFloat(row.po_amount) || 0 });
+  }
+
+  const invoices = (invoiceData.QueryResponse?.Invoice || []).map(inv => {
+    const docNumber = String(inv.DocNumber || inv.Id);
+    // Commission is based on the full invoiced amount, not the pre-tax subtotal
+    const subtotal = parseFloat(inv.TotalAmt) || 0;
+    const entry = entryMap[docNumber] || { freight_cost: 0, paid_by_cc: false, additional_tariff: 0 };
+    const pos = posMap[docNumber] || [];
+    const breakdown = computeCommission(companyKey, subtotal, entry, pos);
+
+    return {
+      docNumber,
+      txnDate: inv.TxnDate,
+      customerName: inv.CustomerRef?.name || '',
+      subtotal,
+      freightCost: parseFloat(entry.freight_cost) || 0,
+      paidByCc: !!entry.paid_by_cc,
+      additionalTariff: parseFloat(entry.additional_tariff) || 0,
+      pos,
+      ...breakdown,
+    };
+  }).sort((a, b) => new Date(a.txnDate) - new Date(b.txnDate));
+
+  return { companyName: company.name, invoices };
+}
+
+// GET all invoices + commission breakdown for a single day
+app.get('/api/commission2/:companyKey/day', async (req, res) => {
+  const { companyKey } = req.params;
+  const { date } = req.query;
+  if (!COMMISSION_COMPANY_KEYS.includes(companyKey)) return res.status(400).json({ error: 'Invalid company' });
+  if (!date) return res.status(400).json({ error: 'date query param required (YYYY-MM-DD)' });
   try {
-    const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0];
+    const data = await getCommissionInvoices(companyKey, date, date);
+    res.json(data);
+  } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
+});
 
-    const [invoiceData, billData, adjRes] = await Promise.all([
-      qboGet(companyKey, `query?query=${encodeURIComponent(`SELECT * FROM Invoice WHERE TxnDate >= '${ninetyDaysAgo}' MAXRESULTS 1000`)}`),
-      qboGet(companyKey, `query?query=${encodeURIComponent(`SELECT * FROM Bill WHERE TxnDate >= '${ninetyDaysAgo}' MAXRESULTS 1000`)}`),
-      pool.query('SELECT period_label, shipping_cost, cc_cost FROM commission_adjustments WHERE company_key=$1', [companyKey]),
-    ]);
+// GET all invoices + commission breakdown for a whole month (for totals + export)
+app.get('/api/commission2/:companyKey/month', async (req, res) => {
+  const { companyKey } = req.params;
+  const { month } = req.query; // YYYY-MM
+  if (!COMMISSION_COMPANY_KEYS.includes(companyKey)) return res.status(400).json({ error: 'Invalid company' });
+  if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month query param required (YYYY-MM)' });
+  try {
+    const [year, mo] = month.split('-').map(Number);
+    const start = `${month}-01`;
+    const lastDay = new Date(year, mo, 0).getDate(); // day 0 of next month = last day of this month
+    const end = `${month}-${String(lastDay).padStart(2, '0')}`;
+    const data = await getCommissionInvoices(companyKey, start, end);
+    res.json(data);
+  } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
+});
 
-    if (invoiceData.Fault) return res.status(500).json({ error: 'QBO error (Invoice): ' + JSON.stringify(invoiceData.Fault) });
-    if (billData.Fault) return res.status(500).json({ error: 'QBO error (Bill): ' + JSON.stringify(billData.Fault) });
-
-    const now = Date.now();
-    const MS_PER_DAY = 86400000;
-
-    // Itemized invoices (sales)
-    const invoices = (invoiceData.QueryResponse?.Invoice || []).map(inv => {
-      const tax = parseFloat(inv.TxnTaxDetail?.TotalTax) || 0;
-      const subtotal = (parseFloat(inv.TotalAmt) || 0) - tax;
-      return {
-        docNumber: inv.DocNumber || inv.Id,
-        txnDate: inv.TxnDate,
-        customerName: inv.CustomerRef?.name || '',
-        subtotal,
-        ageDays: (now - new Date(inv.TxnDate).getTime()) / MS_PER_DAY,
-      };
-    }).sort((a, b) => new Date(b.txnDate) - new Date(a.txnDate));
-
-    // Itemized bills/POs (cost from ProClean)
-    const bills = (billData.QueryResponse?.Bill || []).map(bill => ({
-      docNumber: bill.DocNumber || bill.Id,
-      txnDate: bill.TxnDate,
-      vendorName: bill.VendorRef?.name || '',
-      amount: parseFloat(bill.TotalAmt) || 0,
-      ageDays: (now - new Date(bill.TxnDate).getTime()) / MS_PER_DAY,
-    })).sort((a, b) => new Date(b.txnDate) - new Date(a.txnDate));
-
-    const adjMap = {};
-    for (const row of adjRes.rows) adjMap[row.period_label] = row;
-
-    const periodDays = { last30: 30, last60: 60, last90: 90 };
-    const buckets = {};
-    for (const period of COMMISSION_PERIODS) {
-      const maxAge = periodDays[period];
-      const totalSales = invoices.filter(i => i.ageDays <= maxAge).reduce((s, i) => s + i.subtotal, 0);
-      const totalCost = bills.filter(b => b.ageDays <= maxAge).reduce((s, b) => s + b.amount, 0);
-      const adj = adjMap[period] || { shipping_cost: 0, cc_cost: 0 };
-      const shippingCost = parseFloat(adj.shipping_cost) || 0;
-      const ccCost = parseFloat(adj.cc_cost) || 0;
-      const grossProfit = totalSales - totalCost;
-      const netProfit = grossProfit - shippingCost - ccCost;
-      const commission = netProfit * 0.5;
-      buckets[period] = {
-        totalSales, totalCost, grossProfit, shippingCost, ccCost, netProfit, commission,
-        invoiceCount: invoices.filter(i => i.ageDays <= maxAge).length,
-        billCount: bills.filter(b => b.ageDays <= maxAge).length,
-      };
-    }
-
-    res.json({ companyName: company.name, invoices, bills, buckets });
+// PATCH freight / credit-card / additional-tariff for one invoice
+app.patch('/api/commission2/:companyKey/invoice/:docNumber', async (req, res) => {
+  const { companyKey, docNumber } = req.params;
+  const { freight_cost, paid_by_cc, additional_tariff } = req.body;
+  if (!COMMISSION_COMPANY_KEYS.includes(companyKey)) return res.status(400).json({ error: 'Invalid company' });
+  try {
+    await pool.query(`
+      INSERT INTO commission_invoice_entries (company_key, doc_number, freight_cost, paid_by_cc, additional_tariff, last_updated)
+      VALUES ($1, $2, $3, $4, $5, NOW())
+      ON CONFLICT (company_key, doc_number) DO UPDATE SET freight_cost=$3, paid_by_cc=$4, additional_tariff=$5, last_updated=NOW()
+    `, [companyKey, docNumber, parseFloat(freight_cost) || 0, !!paid_by_cc, parseFloat(additional_tariff) || 0]);
+    res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// PATCH manual shipping/CC cost adjustments for a commission trailing window
-app.patch('/api/commission/:companyKey/adjustments', async (req, res) => {
-  const { companyKey } = req.params;
-  const { period, shipping_cost, cc_cost } = req.body;
+// POST add a PO to an invoice (TLP only, but harmless if used elsewhere)
+app.post('/api/commission2/:companyKey/invoice/:docNumber/pos', async (req, res) => {
+  const { companyKey, docNumber } = req.params;
+  const { po_number, po_amount } = req.body;
   if (!COMMISSION_COMPANY_KEYS.includes(companyKey)) return res.status(400).json({ error: 'Invalid company' });
-  if (!COMMISSION_PERIODS.includes(period)) return res.status(400).json({ error: 'period must be one of last30, last60, last90' });
   try {
-    await pool.query(`
-      INSERT INTO commission_adjustments (company_key, period_label, shipping_cost, cc_cost, last_updated)
-      VALUES ($1, $2, $3, $4, NOW())
-      ON CONFLICT (company_key, period_label) DO UPDATE SET shipping_cost=$3, cc_cost=$4, last_updated=NOW()
-    `, [companyKey, period, parseFloat(shipping_cost) || 0, parseFloat(cc_cost) || 0]);
+    const result = await pool.query(`
+      INSERT INTO commission_invoice_pos (company_key, doc_number, po_number, po_amount)
+      VALUES ($1, $2, $3, $4) RETURNING id
+    `, [companyKey, docNumber, po_number || '', parseFloat(po_amount) || 0]);
+    res.json({ ok: true, id: result.rows[0].id });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PATCH edit a PO
+app.patch('/api/commission2/pos/:id', async (req, res) => {
+  const { id } = req.params;
+  const { po_number, po_amount } = req.body;
+  try {
+    await pool.query('UPDATE commission_invoice_pos SET po_number=$1, po_amount=$2 WHERE id=$3', [po_number || '', parseFloat(po_amount) || 0, id]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// DELETE a PO
+app.delete('/api/commission2/pos/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await pool.query('DELETE FROM commission_invoice_pos WHERE id=$1', [id]);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
