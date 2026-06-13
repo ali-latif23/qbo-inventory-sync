@@ -489,6 +489,7 @@
         <div class="live-dot"></div>
         LIVE
       </div>
+      <a href="/accounting" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:5px 14px;border-radius:6px;font-family:var(--mono);font-size:11px;letter-spacing:0.05em;text-decoration:none">Accounting</a>
       <button onclick="signOut()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:5px 14px;border-radius:6px;font-family:var(--mono);font-size:11px;cursor:pointer;letter-spacing:0.05em">Sign Out</button>
     </div>
   </header>
@@ -682,7 +683,7 @@
     // Companies
     const grid = document.getElementById('companies-grid');
     grid.innerHTML = '';
-    ['company1', 'company2', 'company3'].forEach(key => {
+    ['company1', 'company2', 'company3', 'company4'].forEach(key => {
       const c = status.companies?.[key] || {};
       const connected = c.connected;
       const card = document.createElement('div');
