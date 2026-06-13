@@ -2320,11 +2320,27 @@ app.get('/api/ar/company4/invoices', async (req, res) => {
       });
     }
 
+    let totalReceivables = 0;
     for (const c of customers) {
       c.invoices.sort((a, b) => new Date(a.txnDate) - new Date(b.txnDate));
+
+      const aging = { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d91_plus: 0, total: 0 };
+      for (const inv of c.invoices) {
+        if (inv.balance <= 0) continue;
+        aging.total += inv.balance;
+        const dueRef = inv.dueDate || inv.txnDate;
+        const daysPastDue = (now - new Date(dueRef).getTime()) / MS_PER_DAY;
+        if (daysPastDue <= 0) aging.current += inv.balance;
+        else if (daysPastDue <= 30) aging.d1_30 += inv.balance;
+        else if (daysPastDue <= 60) aging.d31_60 += inv.balance;
+        else if (daysPastDue <= 90) aging.d61_90 += inv.balance;
+        else aging.d91_plus += inv.balance;
+      }
+      c.aging = aging;
+      totalReceivables += aging.total;
     }
 
-    res.json({ companyName: company.name, start, end, customers });
+    res.json({ companyName: company.name, start, end, customers, totalReceivables });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
