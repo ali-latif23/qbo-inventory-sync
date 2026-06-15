@@ -257,16 +257,47 @@
     .notify-sending { opacity: 0.6; cursor: not-allowed; }
     .notify-sent { background: #c6f6d5 !important; color: #276749 !important; }
 
+    /* ── Mobile top bar & retractable sidebar ── */
+    .mobile-topbar {
+      position: fixed; top: 0; left: 0; right: 0; height: 52px; z-index: 220;
+      background: var(--blue-dark); color: white;
+      align-items: center; gap: 12px; padding: 0 14px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+    .hamburger-btn {
+      display: flex; align-items: center; justify-content: center;
+      width: 36px; height: 36px; border-radius: 8px;
+      background: rgba(255,255,255,0.08); border: none; color: white;
+      cursor: pointer; flex-shrink: 0;
+    }
+    .hamburger-btn:hover { background: rgba(255,255,255,0.15); }
+    .mobile-topbar-title { font-size: 15px; font-weight: 700; }
+    .sidebar-backdrop {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 205;
+    }
+    .sidebar-backdrop.visible { display: block; }
+    .sidebar-close-btn {
+      display: none; align-items: center; justify-content: center;
+      width: 28px; height: 28px; border-radius: 6px;
+      background: rgba(255,255,255,0.08); border: none; color: rgba(255,255,255,0.7);
+      cursor: pointer; flex-shrink: 0;
+    }
+    .sidebar-close-btn:hover { background: rgba(255,255,255,0.15); color: white; }
+
     /* ── Mobile / Landscape improvements ── */
     @media (max-width: 900px) {
-      .sidebar { width: 52px; min-width: 52px; }
-      .sidebar-top { padding: 12px 8px; }
-      .sidebar-logo span, .sidebar-sub, .live-badge span:last-child, .last-sync-txt { display: none; }
-      .sidebar-logo { justify-content: center; }
-      .nav-item { padding: 10px; justify-content: center; }
-      .nav-item span { display: none; }
-      .sidebar-footer { padding: 8px; }
-      .live-dot { margin: 0 auto; }
+      .mobile-topbar { display: flex; }
+      .app { padding-top: 52px; }
+      .sidebar {
+        position: fixed; top: 0; left: 0; height: 100vh; z-index: 210;
+        width: 240px; min-width: 240px;
+        transform: translateX(-100%);
+        transition: transform 0.22s ease;
+        box-shadow: 8px 0 24px rgba(0,0,0,0.25);
+      }
+      .sidebar.open { transform: translateX(0); }
+      .sidebar-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+      .sidebar-close-btn { display: flex; }
       .main { padding: 16px 14px; }
       .stat-grid { grid-template-columns: repeat(2,1fr); gap: 10px; margin-bottom: 16px; }
       .stat-value { font-size: 22px; }
@@ -276,6 +307,13 @@
       .page-header { flex-wrap: wrap; gap: 8px; }
       .pk-toolbar { flex-direction: column; align-items: flex-start; }
       .chart-tabs { flex-wrap: wrap; }
+    }
+    @media (min-width: 901px) {
+      .mobile-topbar { display: none; }
+    }
+    @media (max-width: 600px) {
+      .stat-grid { grid-template-columns: 1fr; }
+      .modal-box { width: 100%; }
     }
 
     /* ── Monthly Summary ── */
@@ -299,15 +337,28 @@
   </style>
 </head>
 <body>
+<!-- Mobile top bar -->
+<div class="mobile-topbar">
+  <button class="hamburger-btn" onclick="toggleSidebar()" aria-label="Open menu">
+    <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/></svg>
+  </button>
+  <span class="mobile-topbar-title" id="mobile-topbar-title">Dashboard</span>
+</div>
+<div class="sidebar-backdrop" id="sidebar-backdrop" onclick="closeSidebar()"></div>
 <div class="app">
   <!-- Sidebar -->
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar">
     <div class="sidebar-top">
+      <div>
       <div class="sidebar-logo">
         <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
         ProClean
       </div>
       <div class="sidebar-sub">Production Dashboard</div>
+      </div>
+      <button class="sidebar-close-btn" onclick="closeSidebar()" aria-label="Close menu">
+        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
     </div>
     <nav class="sidebar-nav">
       <button class="nav-item" onclick="showPage('dashboard')">
@@ -575,11 +626,29 @@ function showPage(name) {
   document.getElementById('page-' + name).classList.add('active');
   const map = { dashboard: 0, inventory: 1, detail: 1, movements: 2, monthly: 3, pakistan: 4 };
   if (map[name] !== undefined) document.querySelectorAll('.nav-item')[map[name]].classList.add('active');
+  const titles = { dashboard: 'Dashboard', inventory: 'Inventory', detail: 'Inventory', movements: 'Movements', monthly: 'Monthly Summary', pakistan: 'Pakistan Stock' };
+  const topbarTitle = document.getElementById('mobile-topbar-title');
+  if (topbarTitle) topbarTitle.textContent = titles[name] || '';
+  closeSidebar();
   if (name === 'dashboard') renderDashboard();
   if (name === 'inventory') renderInventory();
   if (name === 'movements') renderMovementsPage();
   if (name === 'monthly') renderMonthlySummary();
   if (name === 'pakistan') renderPakistanStock();
+}
+
+function toggleSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  if (sidebar.classList.contains('open')) closeSidebar();
+  else openSidebar();
+}
+function openSidebar() {
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('sidebar-backdrop').classList.add('visible');
+}
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebar-backdrop').classList.remove('visible');
 }
 
 // ── Load data ────────────────────────────────────────────────────────────────
